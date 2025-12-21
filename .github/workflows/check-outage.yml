@@ -1,0 +1,48 @@
+name: Check Toshima TV Outage
+
+on:
+  schedule:
+    # 毎時0分と30分に実行（UTC）
+    - cron: '0,30 * * * *'
+  workflow_dispatch:  # 手動実行用
+
+permissions:
+  contents: write  # 状態ファイルのコミット用
+
+jobs:
+  check-outage:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run outage checker
+        env:
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          TZ: Asia/Tokyo
+        run: uv run python -m src.main
+
+      - name: Commit state changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add data/state.json
+          git diff --staged --quiet || git commit -m "chore: Update outage state [skip ci]"
+          git push
