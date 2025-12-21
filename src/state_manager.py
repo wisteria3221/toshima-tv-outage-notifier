@@ -44,7 +44,7 @@ class StateManager:
     新規障害やステータス変更を検出する
     """
 
-    SCHEMA_VERSION = "1.0"
+    SCHEMA_VERSION = "1.1"
 
     def __init__(self, state_file: Path | None = None):
         """初期化
@@ -54,6 +54,7 @@ class StateManager:
         """
         self.state_file = state_file or STATE_FILE_PATH
         self.state = self._load_state()
+        self._dirty = False
 
     def _load_state(self) -> dict:
         """状態ファイルを読み込む
@@ -82,10 +83,8 @@ class StateManager:
         Returns:
             初期状態辞書
         """
-        now = datetime.now(UTC).isoformat()
         return {
             "schema_version": self.SCHEMA_VERSION,
-            "last_check": now,
             "outages": {},
             "stats": {
                 "total_notifications_this_month": 0,
@@ -93,17 +92,28 @@ class StateManager:
             },
         }
 
-    def save_state(self) -> None:
-        """状態をファイルに保存"""
+    def save_state(self, force: bool = False) -> bool:
+        """状態をファイルに保存
+
+        Args:
+            force: Trueの場合、dirty状態に関わらず強制保存
+
+        Returns:
+            実際に保存した場合True、スキップした場合False
+        """
+        if not force and not self._dirty:
+            logger.debug("状態に変更がないため保存をスキップします")
+            return False
+
         # ディレクトリが存在しない場合は作成
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
-
-        self.state["last_check"] = datetime.now(UTC).isoformat()
 
         try:
             with open(self.state_file, "w", encoding="utf-8") as f:
                 json.dump(self.state, f, ensure_ascii=False, indent=2)
             logger.info(f"状態ファイルを保存しました: {self.state_file}")
+            self._dirty = False
+            return True
         except OSError as e:
             logger.error(f"状態ファイルの保存に失敗: {e}")
             raise
@@ -158,25 +168,46 @@ class StateManager:
         Args:
             outages: 最新の障害情報リスト
         """
+        # 月のロールオーバーチェック
+        current_month = datetime.now(UTC).strftime("%Y-%m")
+        stats = self.state.get("stats", {})
+        if stats.get("month") != current_month:
+            logger.info(f"月が変わりました: {stats.get('month')} -> {current_month}")
+            stats["month"] = current_month
+            stats["total_notifications_this_month"] = 0
+            self.state["stats"] = stats
+            self._mark_dirty()
+
         stored_outages = self.state.get("outages", {})
         now = datetime.now(UTC).isoformat()
 
         for outage in outages:
             if outage.id in stored_outages:
-                # 既存エントリーを更新（通知状態は保持）
+                # 既存エントリー: フィールド変更をチェック
                 existing = stored_outages[outage.id]
-                existing.update(
-                    {
-                        "date": outage.date,
-                        "status": outage.status,
-                        "title": outage.title,
-                        "area": outage.area,
-                        "url": outage.url,
-                        "last_updated": now,
-                    }
+                changed = (
+                    existing.get("date") != outage.date
+                    or existing.get("status") != outage.status
+                    or existing.get("title") != outage.title
+                    or existing.get("area") != outage.area
+                    or existing.get("url") != outage.url
                 )
+
+                if changed:
+                    self._mark_dirty()
+                    existing.update(
+                        {
+                            "date": outage.date,
+                            "status": outage.status,
+                            "title": outage.title,
+                            "area": outage.area,
+                            "url": outage.url,
+                            "last_updated": now,
+                        }
+                    )
             else:
-                # 新規エントリー
+                # 新規エントリー: 常にdirty
+                self._mark_dirty()
                 stored_outages[outage.id] = {
                     "id": outage.id,
                     "date": outage.date,
@@ -204,6 +235,7 @@ class StateManager:
             if status not in notified:
                 notified.append(status)
                 outages[outage_id]["notified_statuses"] = notified
+                self._mark_dirty()
                 logger.debug(f"通知済みマーク: ID={outage_id}, ステータス={status}")
 
     def increment_notification_count(self) -> None:
@@ -220,6 +252,7 @@ class StateManager:
             stats.get("total_notifications_this_month", 0) + 1
         )
         self.state["stats"] = stats
+        self._mark_dirty()
 
     def get_notification_count_this_month(self) -> int:
         """今月の通知数を取得
@@ -235,3 +268,16 @@ class StateManager:
             return 0
 
         return stats.get("total_notifications_this_month", 0)
+
+    def is_dirty(self) -> bool:
+        """状態に保存が必要な変更があるかチェック
+
+        Returns:
+            変更がある場合True
+        """
+        return self._dirty
+
+    def _mark_dirty(self) -> None:
+        """状態を変更済みとしてマーク（内部用）"""
+        self._dirty = True
+        logger.debug("状態が変更されました（保存が必要）")

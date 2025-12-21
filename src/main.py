@@ -52,9 +52,7 @@ def main() -> int:
 
         if not changes.has_changes():
             logger.info("新しい障害やステータス変更はありませんでした")
-            # 状態を更新して保存（last_check更新のため）
-            state_manager.update_outages(outages)
-            state_manager.save_state()
+            # 変更がない場合は状態更新も保存もスキップ
             return 0
 
         logger.info(
@@ -98,7 +96,12 @@ def main() -> int:
         # 6. 状態保存
         logger.info("状態を保存しています...")
         state_manager.update_outages(outages)
-        state_manager.save_state()
+        saved = state_manager.save_state()
+
+        if saved:
+            logger.info("状態ファイルを保存しました")
+        else:
+            logger.info("状態に変更がないため保存をスキップしました")
 
         if notification_sent:
             logger.info("通知処理が完了しました")
