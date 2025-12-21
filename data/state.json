@@ -123,10 +123,21 @@
       "notified_statuses": [
         "完了"
       ]
+    },
+    "91": {
+      "id": "91",
+      "date": "2025.12.09",
+      "status": "終了",
+      "title": "緊急メンテナンス",
+      "area": "池袋本町1丁目付近",
+      "url": "https://www.toshima.co.jp/trouble/detail/91",
+      "first_seen": "2025-12-21T16:10:01.695508+00:00",
+      "last_updated": "2025-12-21T16:10:01.695508+00:00",
+      "notified_statuses": []
     }
   },
   "stats": {
-    "total_notifications_this_month": 0,
+    "total_notifications_this_month": 1,
     "month": "2025-12"
   }
 }
