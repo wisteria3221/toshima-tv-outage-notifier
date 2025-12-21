@@ -1,116 +1,13 @@
 {
   "schema_version": "1.1",
   "outages": {
-    "91": {
-      "id": "91",
-      "date": "2025.12.09",
-      "status": "終了",
-      "title": "緊急メンテナンス",
-      "area": "池袋本町1丁目付近",
-      "url": "https://www.toshima.co.jp/trouble/detail/91",
-      "first_seen": "2025-12-19T18:46:57.121073+00:00",
-      "last_updated": "2025-12-21T15:35:12.678025+00:00",
-      "notified_statuses": [
-        "終了"
-      ]
-    },
-    "90": {
-      "id": "90",
-      "date": "2025.12.08",
-      "status": "完了",
-      "title": "インターネット設備メンテナンスのお知らせ（12/9 午前2:00～3:00）",
-      "area": "",
-      "url": "https://www.toshima.co.jp/trouble/detail/90",
-      "first_seen": "2025-12-19T18:42:37.167813+00:00",
-      "last_updated": "2025-12-21T05:06:33.526073+00:00",
-      "notified_statuses": [
-        "完了"
-      ]
-    },
-    "89": {
-      "id": "89",
-      "date": "2025.12.08",
+    "75": {
+      "id": "75",
+      "date": "2025.09.17",
       "status": "",
       "title": "一部地域　通信障害について",
-      "area": "池袋本町1丁目付近",
-      "url": "https://www.toshima.co.jp/trouble/detail/89",
-      "first_seen": "2025-12-19T18:42:37.167813+00:00",
-      "last_updated": "2025-12-21T05:06:33.526073+00:00",
-      "notified_statuses": []
-    },
-    "88": {
-      "id": "88",
-      "date": "2025.12.04",
-      "status": "復旧",
-      "title": "一部地域サービス停波について",
-      "area": "要町3丁目付近",
-      "url": "https://www.toshima.co.jp/trouble/detail/88",
-      "first_seen": "2025-12-19T18:42:37.167813+00:00",
-      "last_updated": "2025-12-21T05:06:33.526073+00:00",
-      "notified_statuses": []
-    },
-    "87": {
-      "id": "87",
-      "date": "2025.11.28",
-      "status": "仮復旧",
-      "title": "一部地域　通信障害について",
-      "area": "池袋本町1丁目付近",
-      "url": "https://www.toshima.co.jp/trouble/detail/87",
-      "first_seen": "2025-12-19T18:42:37.167813+00:00",
-      "last_updated": "2025-12-21T05:06:33.526073+00:00",
-      "notified_statuses": []
-    },
-    "86": {
-      "id": "86",
-      "date": "2025.11.17",
-      "status": "復旧",
-      "title": "一部地域　通信障害について",
-      "area": "東池袋4丁目付近",
-      "url": "https://www.toshima.co.jp/trouble/detail/86",
-      "first_seen": "2025-12-19T18:42:37.167813+00:00",
-      "last_updated": "2025-12-21T05:06:33.526073+00:00",
-      "notified_statuses": []
-    },
-    "85": {
-      "id": "85",
-      "date": "2025.11.07",
-      "status": "終了",
-      "title": "緊急メンテナンス",
-      "area": "南大塚3丁目付近",
-      "url": "https://www.toshima.co.jp/trouble/detail/85",
-      "first_seen": "2025-12-19T18:42:37.167813+00:00",
-      "last_updated": "2025-12-21T05:06:33.526073+00:00",
-      "notified_statuses": []
-    },
-    "84": {
-      "id": "84",
-      "date": "2025.11.01",
-      "status": "復旧",
-      "title": "一部地域サービス停波について",
       "area": "南長崎1丁目付近",
-      "url": "https://www.toshima.co.jp/trouble/detail/84",
-      "first_seen": "2025-12-19T18:42:37.167813+00:00",
-      "last_updated": "2025-12-21T05:06:33.526073+00:00",
-      "notified_statuses": []
-    },
-    "83": {
-      "id": "83",
-      "date": "2025.10.29",
-      "status": "復旧",
-      "title": "一部地域　通信障害について",
-      "area": "池袋本町1丁目、4丁目付近",
-      "url": "https://www.toshima.co.jp/trouble/detail/83",
-      "first_seen": "2025-12-19T18:42:37.167813+00:00",
-      "last_updated": "2025-12-21T05:06:33.526073+00:00",
-      "notified_statuses": []
-    },
-    "82": {
-      "id": "82",
-      "date": "2025.10.22",
-      "status": "復旧",
-      "title": "一部地域サービス停波について",
-      "area": "上池袋2丁目付近",
-      "url": "https://www.toshima.co.jp/trouble/detail/82",
+      "url": "https://www.toshima.co.jp/trouble/detail/75",
       "first_seen": "2025-12-19T18:42:37.167813+00:00",
       "last_updated": "2025-12-21T05:06:33.526073+00:00",
       "notified_statuses": []
@@ -126,20 +23,110 @@
       "last_updated": "2025-12-21T05:06:33.526073+00:00",
       "notified_statuses": []
     },
-    "75": {
-      "id": "75",
-      "date": "2025.09.17",
-      "status": "",
-      "title": "一部地域　通信障害について",
-      "area": "南長崎1丁目付近",
-      "url": "https://www.toshima.co.jp/trouble/detail/75",
+    "82": {
+      "id": "82",
+      "date": "2025.10.22",
+      "status": "復旧",
+      "title": "一部地域サービス停波について",
+      "area": "上池袋2丁目付近",
+      "url": "https://www.toshima.co.jp/trouble/detail/82",
       "first_seen": "2025-12-19T18:42:37.167813+00:00",
       "last_updated": "2025-12-21T05:06:33.526073+00:00",
       "notified_statuses": []
+    },
+    "83": {
+      "id": "83",
+      "date": "2025.10.29",
+      "status": "復旧",
+      "title": "一部地域　通信障害について",
+      "area": "池袋本町1丁目、4丁目付近",
+      "url": "https://www.toshima.co.jp/trouble/detail/83",
+      "first_seen": "2025-12-19T18:42:37.167813+00:00",
+      "last_updated": "2025-12-21T05:06:33.526073+00:00",
+      "notified_statuses": []
+    },
+    "84": {
+      "id": "84",
+      "date": "2025.11.01",
+      "status": "復旧",
+      "title": "一部地域サービス停波について",
+      "area": "南長崎1丁目付近",
+      "url": "https://www.toshima.co.jp/trouble/detail/84",
+      "first_seen": "2025-12-19T18:42:37.167813+00:00",
+      "last_updated": "2025-12-21T05:06:33.526073+00:00",
+      "notified_statuses": []
+    },
+    "85": {
+      "id": "85",
+      "date": "2025.11.07",
+      "status": "終了",
+      "title": "緊急メンテナンス",
+      "area": "南大塚3丁目付近",
+      "url": "https://www.toshima.co.jp/trouble/detail/85",
+      "first_seen": "2025-12-19T18:42:37.167813+00:00",
+      "last_updated": "2025-12-21T05:06:33.526073+00:00",
+      "notified_statuses": []
+    },
+    "86": {
+      "id": "86",
+      "date": "2025.11.17",
+      "status": "復旧",
+      "title": "一部地域　通信障害について",
+      "area": "東池袋4丁目付近",
+      "url": "https://www.toshima.co.jp/trouble/detail/86",
+      "first_seen": "2025-12-19T18:42:37.167813+00:00",
+      "last_updated": "2025-12-21T05:06:33.526073+00:00",
+      "notified_statuses": []
+    },
+    "87": {
+      "id": "87",
+      "date": "2025.11.28",
+      "status": "仮復旧",
+      "title": "一部地域　通信障害について",
+      "area": "池袋本町1丁目付近",
+      "url": "https://www.toshima.co.jp/trouble/detail/87",
+      "first_seen": "2025-12-19T18:42:37.167813+00:00",
+      "last_updated": "2025-12-21T05:06:33.526073+00:00",
+      "notified_statuses": []
+    },
+    "88": {
+      "id": "88",
+      "date": "2025.12.04",
+      "status": "復旧",
+      "title": "一部地域サービス停波について",
+      "area": "要町3丁目付近",
+      "url": "https://www.toshima.co.jp/trouble/detail/88",
+      "first_seen": "2025-12-19T18:42:37.167813+00:00",
+      "last_updated": "2025-12-21T05:06:33.526073+00:00",
+      "notified_statuses": []
+    },
+    "89": {
+      "id": "89",
+      "date": "2025.12.08",
+      "status": "",
+      "title": "一部地域　通信障害について",
+      "area": "池袋本町1丁目付近",
+      "url": "https://www.toshima.co.jp/trouble/detail/89",
+      "first_seen": "2025-12-19T18:42:37.167813+00:00",
+      "last_updated": "2025-12-21T05:06:33.526073+00:00",
+      "notified_statuses": []
+    },
+    "90": {
+      "id": "90",
+      "date": "2025.12.08",
+      "status": "完了",
+      "title": "インターネット設備メンテナンスのお知らせ（12/9 午前2:00～3:00）",
+      "area": "",
+      "url": "https://www.toshima.co.jp/trouble/detail/90",
+      "first_seen": "2025-12-19T18:42:37.167813+00:00",
+      "last_updated": "2025-12-21T05:06:33.526073+00:00",
+      "notified_statuses": [
+        "完了"
+      ]
     }
   },
   "stats": {
-    "total_notifications_this_month": 15,
+    "total_notifications_this_month": 0,
     "month": "2025-12"
   }
 }
