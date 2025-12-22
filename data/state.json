@@ -138,17 +138,19 @@
     "92": {
       "id": "92",
       "date": "2025.12.22",
-      "status": "",
+      "status": "終了",
       "title": "緊急メンテナンス",
-      "area": "千川1丁目付近",
+      "area": "千川１丁目付近",
       "url": "https://www.toshima.co.jp/trouble/detail/92",
       "first_seen": "2025-12-22T00:48:44.477841+00:00",
-      "last_updated": "2025-12-22T00:48:44.477841+00:00",
-      "notified_statuses": []
+      "last_updated": "2025-12-22T02:53:12.410162+00:00",
+      "notified_statuses": [
+        "終了"
+      ]
     }
   },
   "stats": {
-    "total_notifications_this_month": 2,
+    "total_notifications_this_month": 3,
     "month": "2025-12"
   }
 }
