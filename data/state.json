@@ -147,10 +147,21 @@
       "notified_statuses": [
         "終了"
       ]
+    },
+    "93": {
+      "id": "93",
+      "date": "2026.01.19",
+      "status": "",
+      "title": "【緊急】機器交換工事のお知らせ",
+      "area": "",
+      "url": "https://www.toshima.co.jp/trouble/detail/93",
+      "first_seen": "2026-01-19T02:59:46.972435+00:00",
+      "last_updated": "2026-01-19T02:59:46.972435+00:00",
+      "notified_statuses": []
     }
   },
   "stats": {
-    "total_notifications_this_month": 3,
-    "month": "2025-12"
+    "total_notifications_this_month": 1,
+    "month": "2026-01"
   }
 }
