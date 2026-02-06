@@ -182,10 +182,21 @@
       "first_seen": "2026-01-26T06:20:02.959168+00:00",
       "last_updated": "2026-01-26T06:20:02.959168+00:00",
       "notified_statuses": []
+    },
+    "96": {
+      "id": "96",
+      "date": "2026.02.06",
+      "status": "",
+      "title": "一部地域　通信障害について",
+      "area": "駒込1丁目付近",
+      "url": "https://www.toshima.co.jp/trouble/detail/96",
+      "first_seen": "2026-02-06T03:25:42.888675+00:00",
+      "last_updated": "2026-02-06T03:25:42.888675+00:00",
+      "notified_statuses": []
     }
   },
   "stats": {
-    "total_notifications_this_month": 4,
-    "month": "2026-01"
+    "total_notifications_this_month": 1,
+    "month": "2026-02"
   }
 }
