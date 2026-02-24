@@ -230,10 +230,21 @@
       "notified_statuses": [
         "復旧"
       ]
+    },
+    "100": {
+      "id": "100",
+      "date": "2026.02.24",
+      "status": "完了",
+      "title": "【緊急】幹線メンテナンスのお知らせ",
+      "area": "池袋本町2丁目付近",
+      "url": "https://www.toshima.co.jp/trouble/detail/100",
+      "first_seen": "2026-02-24T03:31:36.182541+00:00",
+      "last_updated": "2026-02-24T03:31:36.182541+00:00",
+      "notified_statuses": []
     }
   },
   "stats": {
-    "total_notifications_this_month": 6,
+    "total_notifications_this_month": 7,
     "month": "2026-02"
   }
 }
