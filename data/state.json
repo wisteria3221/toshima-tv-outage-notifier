@@ -252,10 +252,21 @@
       "first_seen": "2026-03-10T03:17:28.146168+00:00",
       "last_updated": "2026-03-10T03:17:28.146168+00:00",
       "notified_statuses": []
+    },
+    "102": {
+      "id": "102",
+      "date": "2026.03.10",
+      "status": "2026年3月12日",
+      "title": "【インターネット】設備メンテナンスのお知らせ",
+      "area": "",
+      "url": "https://www.toshima.co.jp/trouble/detail/102",
+      "first_seen": "2026-03-10T09:04:49.705603+00:00",
+      "last_updated": "2026-03-10T09:04:49.705603+00:00",
+      "notified_statuses": []
     }
   },
   "stats": {
-    "total_notifications_this_month": 1,
+    "total_notifications_this_month": 2,
     "month": "2026-03"
   }
 }
