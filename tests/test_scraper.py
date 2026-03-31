@@ -3,7 +3,10 @@
 from pathlib import Path
 
 import pytest
+import requests
+import responses as responses_lib
 
+from src.config import TOSHIMA_TROUBLE_URL
 from src.scraper import OutageInfo, ToshimaScraper
 
 
@@ -123,3 +126,74 @@ class TestExtractTitleAndArea:
 
         assert "定期メンテナンス" in title
         assert area == ""
+
+
+class TestFetchWithRetry:
+    """_fetch_with_retry のテスト"""
+
+    @responses_lib.activate
+    def test_successful_fetch_returns_html(self, scraper):
+        """正常レスポンスでHTMLを返すこと"""
+        responses_lib.add(
+            responses_lib.GET,
+            TOSHIMA_TROUBLE_URL,
+            body="<html><body>test</body></html>",
+            status=200,
+        )
+        result = scraper._fetch_with_retry(TOSHIMA_TROUBLE_URL)
+        assert result is not None
+        assert "test" in result
+
+    @responses_lib.activate
+    def test_returns_none_on_http_error(self, scraper):
+        """HTTPエラー（404）の場合にNoneを返すこと（リトライ後）"""
+        for _ in range(3):
+            responses_lib.add(
+                responses_lib.GET,
+                TOSHIMA_TROUBLE_URL,
+                status=404,
+            )
+        result = scraper._fetch_with_retry(TOSHIMA_TROUBLE_URL)
+        assert result is None
+
+    @responses_lib.activate
+    def test_returns_none_after_all_connection_failures(self, scraper):
+        """接続エラーがリトライ回数分続いた場合にNoneを返すこと"""
+        for _ in range(3):
+            responses_lib.add(
+                responses_lib.GET,
+                TOSHIMA_TROUBLE_URL,
+                body=requests.exceptions.ConnectionError("接続失敗"),
+            )
+        result = scraper._fetch_with_retry(TOSHIMA_TROUBLE_URL)
+        assert result is None
+
+
+class TestFetchOutageList:
+    """fetch_outage_list のテスト"""
+
+    @responses_lib.activate
+    def test_returns_outages_from_page(self, scraper, sample_list_html):
+        """正常なHTMLから障害情報リストを返すこと"""
+        responses_lib.add(
+            responses_lib.GET,
+            TOSHIMA_TROUBLE_URL,
+            body=sample_list_html,
+            status=200,
+            content_type="text/html; charset=utf-8",
+        )
+        outages = scraper.fetch_outage_list()
+        assert len(outages) > 0
+        assert all(isinstance(o, OutageInfo) for o in outages)
+
+    @responses_lib.activate
+    def test_returns_empty_list_when_fetch_fails(self, scraper):
+        """フェッチ失敗時に空リストを返すこと"""
+        for _ in range(3):
+            responses_lib.add(
+                responses_lib.GET,
+                TOSHIMA_TROUBLE_URL,
+                status=500,
+            )
+        outages = scraper.fetch_outage_list()
+        assert outages == []

@@ -169,14 +169,7 @@ class StateManager:
             outages: 最新の障害情報リスト
         """
         # 月のロールオーバーチェック
-        current_month = datetime.now(UTC).strftime("%Y-%m")
-        stats = self.state.get("stats", {})
-        if stats.get("month") != current_month:
-            logger.info(f"月が変わりました: {stats.get('month')} -> {current_month}")
-            stats["month"] = current_month
-            stats["total_notifications_this_month"] = 0
-            self.state["stats"] = stats
-            self._mark_dirty()
+        self._ensure_current_month()
 
         stored_outages = self.state.get("outages", {})
         now = datetime.now(UTC).isoformat()
@@ -240,14 +233,8 @@ class StateManager:
 
     def increment_notification_count(self) -> None:
         """月間通知カウントをインクリメント"""
-        current_month = datetime.now(UTC).strftime("%Y-%m")
+        self._ensure_current_month()
         stats = self.state.get("stats", {})
-
-        # 月が変わった場合はカウントをリセット
-        if stats.get("month") != current_month:
-            stats["month"] = current_month
-            stats["total_notifications_this_month"] = 0
-
         stats["total_notifications_this_month"] = (
             stats.get("total_notifications_this_month", 0) + 1
         )
@@ -281,3 +268,14 @@ class StateManager:
         """状態を変更済みとしてマーク（内部用）"""
         self._dirty = True
         logger.debug("状態が変更されました（保存が必要）")
+
+    def _ensure_current_month(self) -> None:
+        """月が変わっていた場合に統計カウンターをリセット（内部用）"""
+        current_month = datetime.now(UTC).strftime("%Y-%m")
+        stats = self.state.get("stats", {})
+        if stats.get("month") != current_month:
+            logger.info(f"月が変わりました: {stats.get('month')} -> {current_month}")
+            stats["month"] = current_month
+            stats["total_notifications_this_month"] = 0
+            self.state["stats"] = stats
+            self._mark_dirty()

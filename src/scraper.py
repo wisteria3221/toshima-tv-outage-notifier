@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 import requests
 from bs4 import BeautifulSoup
+from bs4.element import Tag
 
 from .config import (
     BACKOFF_FACTOR,
@@ -125,13 +126,13 @@ class ToshimaScraper:
                 outage = self._parse_outage_entry(link)
                 if outage:
                     outages.append(outage)
-            except Exception as e:
+            except (AttributeError, ValueError) as e:
                 logger.warning(f"障害エントリーのパースに失敗: {e}")
                 continue
 
         return outages
 
-    def _parse_outage_entry(self, link_element) -> OutageInfo | None:
+    def _parse_outage_entry(self, link_element: Tag) -> OutageInfo | None:
         """個別の障害エントリーをパース
 
         Args:

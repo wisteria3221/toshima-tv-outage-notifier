@@ -30,7 +30,7 @@ DRY_RUN = os.environ.get("DRY_RUN", "false").lower() == "true"
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
 
-def get_x_credentials() -> dict:
+def get_x_credentials() -> dict[str, str]:
     """X API認証情報を環境変数から取得"""
     return {
         "consumer_key": os.environ.get("X_API_KEY", ""),

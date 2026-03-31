@@ -15,6 +15,10 @@ from .state_manager import StateManager, StatusChange
 
 logger = logging.getLogger(__name__)
 
+_RATE_LIMIT_CRITICAL_RATIO = 0.96  # 96%: 新規障害のみ
+_RATE_LIMIT_REDUCED_RATIO = 0.90  # 90%: 新規障害のみ、ステータス変更スキップ
+_RESOLUTION_STATUSES = frozenset(["復旧", "終了", "完了"])
+
 
 class XNotifier:
     """X（Twitter）通知クラス"""
@@ -50,7 +54,7 @@ class XNotifier:
             logger.info("X APIクライアントを初期化しました")
             return client
 
-        except Exception as e:
+        except tweepy.TweepyException as e:
             logger.error(f"X APIクライアントの初期化に失敗: {e}")
             return None
 
@@ -116,7 +120,7 @@ class XNotifier:
         new_status = change.new_status or "進行中"
 
         # ステータスに応じてヘッダーを変更
-        if new_status in ["復旧", "終了", "完了"]:
+        if new_status in _RESOLUTION_STATUSES:
             header = f"【としまテレビ {new_status}情報】"
             status_text = f"{outage.title} が{new_status}しました"
         else:
@@ -221,11 +225,11 @@ def should_notify_change(
     count = state_manager.get_notification_count_this_month()
 
     # 96%以上使用: 新規障害のみ
-    if count >= int(MONTHLY_TWEET_LIMIT * 0.96):
+    if count >= int(MONTHLY_TWEET_LIMIT * _RATE_LIMIT_CRITICAL_RATIO):
         return change_type == "new"
 
-    # 90%以上使用: 新規障害と重要なステータス変更
-    if count >= int(MONTHLY_TWEET_LIMIT * 0.90):
-        return change_type in ["new"]
+    # 90%以上使用: 新規障害のみ（ステータス変更はスキップ）
+    if count >= int(MONTHLY_TWEET_LIMIT * _RATE_LIMIT_REDUCED_RATIO):
+        return change_type == "new"
 
     return True
