@@ -14,7 +14,7 @@
 	// Use 'postCreateCommand' to run commands after the container is created.
 	"postCreateCommand": "pip install uv && uv sync --all-extras",
 	"features": {
-		"ghcr.io/devcontainers-extra/features/claude-code:1": {}
+		"ghcr.io/devcontainers-extra/features/claude-code:2": {}
 	},
 
 	// Configure tool-specific properties.
