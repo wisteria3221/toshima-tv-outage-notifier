@@ -274,10 +274,21 @@
       "first_seen": "2026-03-23T05:51:14.451457+00:00",
       "last_updated": "2026-03-23T05:51:14.451457+00:00",
       "notified_statuses": []
+    },
+    "105": {
+      "id": "105",
+      "date": "2026.05.13",
+      "status": "",
+      "title": "悪天候による映像障害について",
+      "area": "",
+      "url": "https://www.toshima.co.jp/trouble/detail/105",
+      "first_seen": "2026-05-13T08:28:03.573938+00:00",
+      "last_updated": "2026-05-13T08:28:03.573938+00:00",
+      "notified_statuses": []
     }
   },
   "stats": {
-    "total_notifications_this_month": 3,
-    "month": "2026-03"
+    "total_notifications_this_month": 0,
+    "month": "2026-05"
   }
 }
