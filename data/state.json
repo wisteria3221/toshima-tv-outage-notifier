@@ -289,12 +289,12 @@
     "106": {
       "id": "106",
       "date": "2026.05.15",
-      "status": "仮復旧",
+      "status": "復旧",
       "title": "一部チャンネル（ショップチャンネル／QVC／ジュエリー☆GSTV）映像障害について",
       "area": "",
       "url": "https://www.toshima.co.jp/trouble/detail/106",
       "first_seen": "2026-05-15T01:48:58.815831+00:00",
-      "last_updated": "2026-05-15T01:48:58.815831+00:00",
+      "last_updated": "2026-05-15T08:33:27.724085+00:00",
       "notified_statuses": []
     }
   },
