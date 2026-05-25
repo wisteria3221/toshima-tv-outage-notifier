@@ -307,6 +307,17 @@
       "first_seen": "2026-05-25T06:25:03.508542+00:00",
       "last_updated": "2026-05-25T06:25:03.508542+00:00",
       "notified_statuses": []
+    },
+    "108": {
+      "id": "108",
+      "date": "2026.05.25",
+      "status": "",
+      "title": "ホームページ閲覧障害について",
+      "area": "",
+      "url": "https://www.toshima.co.jp/trouble/detail/108",
+      "first_seen": "2026-05-25T10:53:05.760871+00:00",
+      "last_updated": "2026-05-25T10:53:05.760871+00:00",
+      "notified_statuses": []
     }
   },
   "stats": {
