@@ -296,6 +296,17 @@
       "first_seen": "2026-05-15T01:48:58.815831+00:00",
       "last_updated": "2026-05-15T08:33:27.724085+00:00",
       "notified_statuses": []
+    },
+    "107": {
+      "id": "107",
+      "date": "2026.05.25",
+      "status": "",
+      "title": "幹線設備メンテナンスのお知らせ",
+      "area": "高田3丁目、目白1丁目付近",
+      "url": "https://www.toshima.co.jp/trouble/detail/107",
+      "first_seen": "2026-05-25T06:25:03.508542+00:00",
+      "last_updated": "2026-05-25T06:25:03.508542+00:00",
+      "notified_statuses": []
     }
   },
   "stats": {
