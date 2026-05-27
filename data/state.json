@@ -318,6 +318,17 @@
       "first_seen": "2026-05-25T10:53:05.760871+00:00",
       "last_updated": "2026-05-25T10:53:05.760871+00:00",
       "notified_statuses": []
+    },
+    "109": {
+      "id": "109",
+      "date": "2026.05.27",
+      "status": "高田、目白、西早稲田",
+      "title": "一部地域映像障害について",
+      "area": "",
+      "url": "https://www.toshima.co.jp/trouble/detail/109",
+      "first_seen": "2026-05-27T10:33:12.037255+00:00",
+      "last_updated": "2026-05-27T10:33:12.037255+00:00",
+      "notified_statuses": []
     }
   },
   "stats": {
