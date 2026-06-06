@@ -2,6 +2,8 @@
 
 import logging
 import sys
+from collections.abc import Callable
+from functools import partial
 
 from dotenv import load_dotenv
 
@@ -20,6 +22,38 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
+
+
+def _process_notification(
+    state_manager: StateManager,
+    change_type: str,
+    notify: Callable[[], bool],
+    outage_id: str,
+    status: str,
+) -> bool:
+    """通知可否を判定し、許可された場合のみ投稿・マーク・カウンタ加算を行う。
+
+    通知を実際に投稿した場合のみ True を返す。
+
+    Args:
+        state_manager: 状態マネージャ
+        change_type: 変更種別（"new" または "status_change"）
+        notify: 引数なしで呼べる投稿関数。成功時 True / 失敗時 False を返す
+        outage_id: 通知済みマーク対象の障害ID
+        status: 通知済みマーク対象のステータス
+
+    Returns:
+        実際に投稿した場合 True、そうでなければ False
+    """
+    # 通知可否判定 → 投稿 → 通知済みマーク → カウンタ加算 の順序を保つ。
+    # should_notify_change が False、または投稿失敗時はマーク・加算をスキップする。
+    if not should_notify_change(state_manager, change_type):
+        return False
+    if not notify():
+        return False
+    state_manager.mark_notified(outage_id, status)
+    state_manager.increment_notification_count()
+    return True
 
 
 def main() -> int:
@@ -74,24 +108,32 @@ def main() -> int:
 
         # 新規障害の通知
         for outage in changes.new_outages:
-            if should_notify_change(state_manager, "new"):
-                if notifier.notify_new_outage(outage):
-                    state_manager.mark_notified(outage.id, outage.status)
-                    state_manager.increment_notification_count()
-                    notification_sent = True
-                    logger.info(f"新規障害を通知しました: {outage.title}")
+            # partial で投稿関数を束縛（ラムダの遅延束縛を避ける）
+            if _process_notification(
+                state_manager,
+                "new",
+                partial(notifier.notify_new_outage, outage),
+                outage.id,
+                outage.status,
+            ):
+                notification_sent = True
+                logger.info(f"新規障害を通知しました: {outage.title}")
 
         # ステータス変更の通知
         for change in changes.status_changes:
-            if should_notify_change(state_manager, "status_change"):
-                if notifier.notify_status_change(change):
-                    state_manager.mark_notified(change.outage.id, change.new_status)
-                    state_manager.increment_notification_count()
-                    notification_sent = True
-                    logger.info(
-                        f"ステータス変更を通知しました: {change.outage.title} "
-                        f"({change.old_status or '進行中'} -> {change.new_status or '進行中'})"
-                    )
+            # partial で投稿関数を束縛（ラムダの遅延束縛を避ける）
+            if _process_notification(
+                state_manager,
+                "status_change",
+                partial(notifier.notify_status_change, change),
+                change.outage.id,
+                change.new_status,
+            ):
+                notification_sent = True
+                logger.info(
+                    f"ステータス変更を通知しました: {change.outage.title} "
+                    f"({change.old_status or '進行中'} -> {change.new_status or '進行中'})"
+                )
 
         # 6. 状態保存
         logger.info("状態を保存しています...")
