@@ -1,23 +1,7 @@
 """メイン処理のテスト"""
 
-import pytest
-
 from src.main import main
-from src.scraper import OutageInfo
 from src.state_manager import ChangeResult
-
-
-@pytest.fixture
-def sample_outage():
-    """テスト用の障害情報"""
-    return OutageInfo(
-        id="100",
-        date="2025.12.20",
-        status="",
-        title="テスト障害",
-        area="池袋",
-        url="https://www.toshima.co.jp/trouble/detail/100",
-    )
 
 
 class TestMainFunction:

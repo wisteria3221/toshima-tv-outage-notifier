@@ -26,7 +26,7 @@
   - _Requirements: 3.1, 3.2, 3.3, 3.4, 1.2_
   - _Boundary: _process_notification_
 
-- [ ] 2.3 (P) テストフィクスチャの conftest 集約
+- [x] 2.3 (P) テストフィクスチャの conftest 集約
   - 複数テストで重複定義されている sample_outage と temp_state_file を tests/conftest.py に集約する
   - 移動元の各テストファイル（test_state_manager / test_notifier / test_main）からローカル定義を削除し、ファイル固有フィクスチャは各ファイルに残す
   - 集約するフィクスチャの値は現行と完全一致させる
