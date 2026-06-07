@@ -56,5 +56,9 @@ Thumbs.db
 # Claude Code
 .claude/
 
+# Kiro
+# steering/ と specs/ はGit管理対象。settings/ のテンプレート雛形は除外
+.kiro/settings/
+
 # Project specific
 # data/state.json はGit管理対象のため除外しない

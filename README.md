@@ -116,11 +116,11 @@ toshima-tv-outage-notifier/
 │   ├── state_manager.py       # 状態管理
 │   ├── notifier.py            # X API連携
 │   └── main.py                # エントリーポイント
-├── tests/                     # テスト
+├── tests/                     # テスト（conftest.py に共通フィクスチャ）
 ├── data/
 │   └── state.json             # 状態保存ファイル
-├── requirements.txt
-├── requirements-dev.txt
+├── pyproject.toml             # 依存定義・ツール設定（ruff など）
+├── uv.lock                    # 依存ロックファイル
 ├── .env.example
 └── README.md
 ```
@@ -136,6 +136,18 @@ uv run pytest
 
 # または、仮想環境を有効化してから実行
 pytest
+```
+
+## Linting & フォーマット
+
+コード品質管理には [Ruff](https://github.com/astral-sh/ruff) を使用しています。
+
+```bash
+# チェック
+uv run ruff check .
+
+# 自動修正 + フォーマットをまとめて実行
+uv run ruff check --fix . && uv run ruff format .
 ```
 
 ## 通知メッセージ例

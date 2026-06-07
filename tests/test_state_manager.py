@@ -7,25 +7,6 @@ from src.state_manager import ChangeResult, StateManager, StatusChange
 
 
 @pytest.fixture
-def temp_state_file(tmp_path):
-    """一時的な状態ファイル"""
-    return tmp_path / "state.json"
-
-
-@pytest.fixture
-def sample_outage():
-    """テスト用の障害情報"""
-    return OutageInfo(
-        id="100",
-        date="2025.12.20",
-        status="",
-        title="テスト障害",
-        area="池袋",
-        url="https://www.toshima.co.jp/trouble/detail/100",
-    )
-
-
-@pytest.fixture
 def sample_outage_with_status():
     """ステータス付きの障害情報"""
     return OutageInfo(

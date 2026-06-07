@@ -20,6 +20,29 @@ from .config import (
 
 logger = logging.getLogger(__name__)
 
+# スクレイピング用の静的正規表現定数群
+# 同一パターンの重複定義を避けるため、module レベルで事前コンパイルして共有する。
+# 入力依存の動的パターン（re.escape を用いる re.sub）は定数化しない。
+
+# 地域キーワード（否定判定・抽出の両方で共有する単一の文字列定数）
+_AREA_KEYWORDS = "丁目|付近|地区|町|番地"
+
+# 詳細リンク判定とID抽出を兼ねる定数（キャプチャグループ付き）。
+# find_all(href=...) は re.search 意味で照合するため、グループ追加は照合結果を変えない。
+_RE_DETAIL_ID = re.compile(r"/trouble/detail/(\d+)")
+
+# 日付抽出（YYYY.MM.DD形式）
+_RE_DATE = re.compile(r"(\d{4}\.\d{2}\.\d{2})")
+
+# ステータス抽出（日付の後に続く最初の括弧内テキスト）
+_RE_STATUS = re.compile(r"(?:\d{4}\.\d{2}\.\d{2})?\s*[（(]([^）)]+)[）)]")
+
+# ステータスが地域情報でないことを確認する否定判定用
+_RE_AREA_KEYWORD = re.compile(_AREA_KEYWORDS)
+
+# 地域抽出（括弧内で地域キーワードを含むもの）
+_RE_AREA_IN_BRACKETS = re.compile(rf"[（(]([^）)]*(?:{_AREA_KEYWORDS})[^）)]*)[）)]")
+
 
 @dataclass
 class OutageInfo:
@@ -119,7 +142,7 @@ class ToshimaScraper:
 
         # 障害詳細へのリンクを含む要素を探す
         # パターン: /trouble/detail/{ID} または /trouble/detail/{ID}/
-        links = soup.find_all("a", href=re.compile(r"/trouble/detail/\d+"))
+        links = soup.find_all("a", href=_RE_DETAIL_ID)
 
         for link in links:
             try:
@@ -148,13 +171,13 @@ class ToshimaScraper:
             return None
 
         # IDを抽出
-        id_match = re.search(r"/trouble/detail/(\d+)", href)
+        id_match = _RE_DETAIL_ID.search(href)
         if not id_match:
             return None
         outage_id = id_match.group(1)
 
         # 日付を抽出（YYYY.MM.DD形式）
-        date_match = re.search(r"(\d{4}\.\d{2}\.\d{2})", text)
+        date_match = _RE_DATE.search(text)
         date = date_match.group(1) if date_match else ""
 
         # ステータスを抽出（最初の括弧内テキスト）
@@ -186,14 +209,12 @@ class ToshimaScraper:
         """
         # 日付の後に続く括弧内のステータスを探す
         # 例: "2025.12.09（終了）緊急メンテナンス..."
-        status_match = re.search(
-            r"(?:\d{4}\.\d{2}\.\d{2})?\s*[（(]([^）)]+)[）)]", text
-        )
+        status_match = _RE_STATUS.search(text)
 
         if status_match:
             status = status_match.group(1)
             # 地域情報（丁目、付近など）ではないことを確認
-            if not re.search(r"丁目|付近|地区|町|番地", status):
+            if not _RE_AREA_KEYWORD.search(status):
                 return status
 
         return ""
@@ -224,9 +245,7 @@ class ToshimaScraper:
         clean_text = clean_text.strip()
 
         # 地域情報を抽出（括弧内で「丁目」「付近」などを含むもの）
-        area_match = re.search(
-            r"[（(]([^）)]*(?:丁目|付近|地区|町|番地)[^）)]*)[）)]", clean_text
-        )
+        area_match = _RE_AREA_IN_BRACKETS.search(clean_text)
         area = area_match.group(1) if area_match else ""
 
         # タイトルを抽出（地域情報を除去）
