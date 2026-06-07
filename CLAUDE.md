@@ -79,7 +79,7 @@ uv run ruff check --fix . && uv run ruff format .
 
 ### 主要コンポーネント
 
-**`OutageInfo` データクラス** ([src/scraper.py:24-33](src/scraper.py#L24-L33))
+**`OutageInfo` データクラス** ([src/scraper.py:47-57](src/scraper.py#L47-L57))
 - 1件の障害を表すコアデータ構造
 - フィールド: `id`, `date`, `status`, `title`, `area`, `url`, `last_updated`
 - `status` の値: `"終了"`, `"復旧"`, `"完了"`, `"仮復旧"`, `"調査中"`, または `""` (空文字 = 進行中)
@@ -90,24 +90,25 @@ uv run ruff check --fix . && uv run ruff format .
 - 月間通知カウンターを含み、レート制限に使用
 - 月が変わると自動的にカウンターをリセット
 
-**通知レート制限** ([src/notifier.py:200-225](src/notifier.py#L200-L225))
+**通知レート制限** ([src/notifier.py:190-235](src/notifier.py#L190-L235))
 - X API Freeプランは月500ツイートまで
-- システムは安全マージンとして月450ツイートに制限（`MONTHLY_TWEET_LIMIT`）
+- システムは安全マージンとして月450ツイートに制限（`MONTHLY_TWEET_LIMIT`、Free枠500の90%）
+- しきい値は定数化（`_RATE_LIMIT_CRITICAL_RATIO=0.96`, `_RATE_LIMIT_REDUCED_RATIO=0.90`）
 - 96%使用時: 新規障害のみ通知
 - 90%使用時: 新規障害のみ通知（ステータス変更は通知しない）
-- ロジックは `should_notify_change()` 関数を参照
+- 送信可否は `can_send_notification()`、変更種別ごとの絞り込みは `should_notify_change()` 関数を参照
 
 ### 変更検出ロジック
 
-**新規障害の検出** ([src/state_manager.py:122-125](src/state_manager.py#L122-L125))
+**新規障害の検出** ([src/state_manager.py:135-138](src/state_manager.py#L135-L138))
 - 障害IDが保存済み状態に存在しない → 新規障害
 
-**ステータス変更の検出** ([src/state_manager.py:128-146](src/state_manager.py#L128-L146))
+**ステータス変更の検出** ([src/state_manager.py:141-161](src/state_manager.py#L141-L161))
 - 現在のステータスと保存済みステータスを比較
 - 新しいステータスが `notified_statuses` 配列に含まれていない場合のみ通知
 - ステータスが変更されていない場合の重複通知を防ぐ
 
-**状態更新フロー** ([src/state_manager.py:150-185](src/state_manager.py#L150-L185))
+**状態更新フロー** ([src/state_manager.py:165-216](src/state_manager.py#L165-L216))
 - `notified_statuses` を保持しながら既存障害を更新
 - 新規障害は空の `notified_statuses` 配列を持つ
 - `mark_notified()` は通知成功後にステータスを配列に追加
@@ -145,7 +146,12 @@ X API用（ローカルでは `.env` に、GitHub Actionsではシークレッ�
 - ツイートが実際に成功した場合にのみステータスを通知済みとしてマーク
 - 状態ファイルが唯一の信頼できる情報源 - 状態が破損すると重複/欠落通知が発生
 
-**メッセージフォーマット** ([src/notifier.py:77-133](src/notifier.py#L77-L133))
+**通知処理の共通化** ([src/main.py:27-56](src/main.py#L27-L56))
+- 新規障害・ステータス変更の通知は `_process_notification()` ヘルパーに集約
+- 「通知可否判定 → 投稿 → 通知済みマーク → カウンタ加算」の順序を保証
+- 投稿関数は `functools.partial` で束縛し、ループ内ラムダの遅延束縛を回避
+
+**メッセージフォーマット** ([src/notifier.py:85-141](src/notifier.py#L85-L141))
 - 新規障害: "【としまテレビ 障害情報】"
 - 復旧/終了/完了へのステータス変更: "【としまテレビ {status}情報】"
 - その他のステータス変更: "【としまテレビ 障害情報更新】"
