@@ -340,6 +340,17 @@
       "first_seen": "2026-06-02T11:45:51.728672+00:00",
       "last_updated": "2026-06-02T11:45:51.728672+00:00",
       "notified_statuses": []
+    },
+    "111": {
+      "id": "111",
+      "date": "2026.06.08",
+      "status": "",
+      "title": "幹線設備メンテナンスのお知らせ",
+      "area": "西池袋 3,5丁目付近",
+      "url": "https://www.toshima.co.jp/trouble/detail/111",
+      "first_seen": "2026-06-08T02:09:47.185924+00:00",
+      "last_updated": "2026-06-08T02:09:47.185924+00:00",
+      "notified_statuses": []
     }
   },
   "stats": {
