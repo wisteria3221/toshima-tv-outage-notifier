@@ -351,6 +351,17 @@
       "first_seen": "2026-06-08T02:09:47.185924+00:00",
       "last_updated": "2026-06-08T02:09:47.185924+00:00",
       "notified_statuses": []
+    },
+    "112": {
+      "id": "112",
+      "date": "2026.06.12",
+      "status": "",
+      "title": "悪天候による映像障害について",
+      "area": "",
+      "url": "https://www.toshima.co.jp/trouble/detail/112",
+      "first_seen": "2026-06-12T05:10:53.774735+00:00",
+      "last_updated": "2026-06-12T05:10:53.774735+00:00",
+      "notified_statuses": []
     }
   },
   "stats": {
