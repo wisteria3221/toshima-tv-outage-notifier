@@ -1,27 +1,33 @@
 // For format details, see https://aka.ms/devcontainer.json. For config options, see the
 // README at: https://github.com/devcontainers/templates/tree/main/src/python
 {
-	"name": "Python 3",
+	"name": "toshima-tv-outage-notifier",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
 	"image": "mcr.microsoft.com/devcontainers/python:3.13",
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
-	// "features": {},
+	"features": {
+		"ghcr.io/devcontainers-extra/features/uv:1": {},
+		"ghcr.io/devcontainers-extra/features/claude-code:2.0.0": {},
+		"ghcr.io/devcontainers/features/node:1": {},
+		"ghcr.io/devcontainers/features/github-cli:1": {}
+	},
 
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "pip install uv && uv sync --all-extras",
-	"features": {
-		"ghcr.io/devcontainers-extra/features/claude-code:1": {}
-	},
+	"postCreateCommand": "uv sync --all-extras",
 
 	// Configure tool-specific properties.
 	"customizations": {
 		"vscode": {
 			"extensions": [
-				"charliermarsh.ruff"
+				"charliermarsh.ruff",
+				"ms-python.python",
+				"ms-python.debugpy",
+				"tamasfe.even-better-toml",
+				"github-actions.vscode-github-actions"
 			],
 			"settings": {
 				"editor.formatOnSave": true,
