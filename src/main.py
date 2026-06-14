@@ -4,6 +4,7 @@ import logging
 import sys
 from collections.abc import Callable
 from functools import partial
+from typing import Literal
 
 from dotenv import load_dotenv
 
@@ -30,10 +31,8 @@ def _process_notification(
     notify: Callable[[], bool],
     outage_id: str,
     status: str,
-) -> bool:
+) -> Literal["sent", "skipped", "failed"]:
     """通知可否を判定し、許可された場合のみ投稿・マーク・カウンタ加算を行う。
-
-    通知を実際に投稿した場合のみ True を返す。
 
     Args:
         state_manager: 状態マネージャ
@@ -43,17 +42,20 @@ def _process_notification(
         status: 通知済みマーク対象のステータス
 
     Returns:
-        実際に投稿した場合 True、そうでなければ False
+        "sent": 実際に投稿した
+        "skipped": レート制限等で意図的に送信しなかった（失敗ではない）
+        "failed": 投稿を試みたが失敗した（リトライ対象）
     """
     # 通知可否判定 → 投稿 → 通知済みマーク → カウンタ加算 の順序を保つ。
-    # should_notify_change が False、または投稿失敗時はマーク・加算をスキップする。
+    # should_notify_change が False の場合は意図的なスキップ（"skipped"）、
+    # 投稿が失敗した場合は "failed" として呼び出し側でエラー扱いする。
     if not should_notify_change(state_manager, change_type):
-        return False
+        return "skipped"
     if not notify():
-        return False
+        return "failed"
     state_manager.mark_notified(outage_id, status)
     state_manager.increment_notification_count()
-    return True
+    return "sent"
 
 
 def main() -> int:
@@ -101,43 +103,68 @@ def main() -> int:
             state_manager.save_state()
             return 0
 
-        # 5. 通知送信
+        # 5. 状態を先に更新する
+        # mark_notified() は state に存在する障害しかマークしないため、
+        # 通知ループの前に新規障害を state へ登録しておく必要がある。
+        # （これより前に呼ぶと新規障害の notified_statuses が常に空のままになる）
+        state_manager.update_outages(outages)
+
+        # 6. 通知送信
         logger.info("通知を送信しています...")
         notifier = XNotifier()
         notification_sent = False
+        notification_failed = False
 
         # 新規障害の通知
         for outage in changes.new_outages:
             # partial で投稿関数を束縛（ラムダの遅延束縛を避ける）
-            if _process_notification(
+            result = _process_notification(
                 state_manager,
                 "new",
                 partial(notifier.notify_new_outage, outage),
                 outage.id,
                 outage.status,
-            ):
+            )
+            if result == "sent":
                 notification_sent = True
                 logger.info(f"新規障害を通知しました: {outage.title}")
+            elif result == "failed":
+                notification_failed = True
+                logger.error(f"新規障害の通知に失敗しました: {outage.title}")
 
         # ステータス変更の通知
         for change in changes.status_changes:
             # partial で投稿関数を束縛（ラムダの遅延束縛を避ける）
-            if _process_notification(
+            result = _process_notification(
                 state_manager,
                 "status_change",
                 partial(notifier.notify_status_change, change),
                 change.outage.id,
                 change.new_status,
-            ):
+            )
+            if result == "sent":
                 notification_sent = True
                 logger.info(
                     f"ステータス変更を通知しました: {change.outage.title} "
                     f"({change.old_status or '進行中'} -> {change.new_status or '進行中'})"
                 )
+            elif result == "failed":
+                notification_failed = True
+                logger.error(
+                    f"ステータス変更の通知に失敗しました: {change.outage.title} "
+                    f"({change.old_status or '進行中'} -> {change.new_status or '進行中'})"
+                )
 
-        # 6. 状態保存
+        # 7. 通知失敗時はエラー終了する
+        # 状態を保存・コミットせずに exit 1 することで、未通知の障害が次回実行で
+        # 再度「新規」または「ステータス変更」として検出されリトライされる。
+        # 同時に GitHub Actions のジョブが失敗するため、サイレントな取りこぼしを防ぐ。
+        if notification_failed:
+            logger.error("通知送信に失敗したため状態を保存せず終了します")
+            return 1
+
+        # 8. 状態保存
         logger.info("状態を保存しています...")
-        state_manager.update_outages(outages)
         saved = state_manager.save_state()
 
         if saved:
@@ -148,7 +175,7 @@ def main() -> int:
         if notification_sent:
             logger.info("通知処理が完了しました")
         else:
-            logger.info("通知は送信されませんでした（制限または条件未達成）")
+            logger.info("通知は送信されませんでした（条件未達成）")
 
         return 0
 
