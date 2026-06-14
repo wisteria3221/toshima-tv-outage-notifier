@@ -68,6 +68,17 @@ uv run ruff format .
 uv run ruff check --fix . && uv run ruff format .
 ```
 
+### cc-sdd（SDD スキル）の更新
+DevContainer には Node.js が含まれており、`npx` で cc-sdd を実行できる。`.claude/skills/` と `.kiro/` を再生成する。
+```bash
+# まず --dry-run で差分をプレビュー（既存ファイルを上書きしないか確認）
+npx cc-sdd@latest --claude-skills --lang ja --dry-run
+
+# 問題なければ実行
+npx cc-sdd@latest --claude-skills --lang ja
+```
+注意: 実行すると `CLAUDE.md` や `.kiro/steering` も更新されうる。`git diff` でレビューしてからコミットすること。
+
 ## アーキテクチャ
 
 ### コアデータフロー
