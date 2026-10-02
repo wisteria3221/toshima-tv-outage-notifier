@@ -458,32 +458,34 @@
     "121": {
       "id": "121",
       "date": "2026.10.02",
-      "status": "",
+      "status": "復旧",
       "title": "緊急メンテナンス",
-      "area": "池袋本町4丁目付近",
+      "area": "池袋本町1、4丁目付近",
       "url": "https://www.toshima.co.jp/trouble/detail/121",
       "first_seen": "2026-10-02T09:03:51.227402+00:00",
-      "last_updated": "2026-10-02T09:03:51.227402+00:00",
+      "last_updated": "2026-10-02T15:53:16.535624+00:00",
       "notified_statuses": [
-        ""
+        "",
+        "復旧"
       ]
     },
     "120": {
       "id": "120",
       "date": "2026.10.02",
-      "status": "",
-      "title": "一部エリア、固定電話受発信不可",
+      "status": "復旧",
+      "title": "一部エリア、電話受発信不可",
       "area": "池袋本町4丁目付近",
       "url": "https://www.toshima.co.jp/trouble/detail/120",
       "first_seen": "2026-10-02T09:03:51.227402+00:00",
-      "last_updated": "2026-10-02T09:03:51.227402+00:00",
+      "last_updated": "2026-10-02T15:53:16.535624+00:00",
       "notified_statuses": [
-        ""
+        "",
+        "復旧"
       ]
     }
   },
   "stats": {
-    "total_notifications_this_month": 2,
+    "total_notifications_this_month": 4,
     "month": "2026-10"
   }
 }
