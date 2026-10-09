@@ -3,13 +3,16 @@
 {
 	"name": "toshima-tv-outage-notifier",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"image": "mcr.microsoft.com/devcontainers/python:3.13",
+	// Python のバージョンは pyproject.toml / CI (check-outage.yml) と揃える
+	"image": "mcr.microsoft.com/devcontainers/python:3.14",
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
+	// メジャーバージョンのみ指定し、正確なバージョンは devcontainer-lock.json で固定する
+	// （Dependabot の devcontainers エコシステムがロックファイルを更新する）
 	"features": {
 		"ghcr.io/devcontainers-extra/features/uv:1": {},
-		"ghcr.io/devcontainers-extra/features/claude-code:2.0.3": {},
-		"ghcr.io/devcontainers/features/node:1": {},
+		"ghcr.io/devcontainers-extra/features/claude-code:2": {},
+		"ghcr.io/devcontainers/features/node:2": {},
 		"ghcr.io/devcontainers/features/github-cli:1": {}
 	},
 
@@ -31,14 +34,16 @@
 			],
 			"settings": {
 				"editor.formatOnSave": true,
-				"editor.defaultFormatter": "charliermarsh.ruff",
 				"[python]": {
 					"editor.defaultFormatter": "charliermarsh.ruff",
 					"editor.codeActionsOnSave": {
 						"source.fixAll.ruff": "explicit",
 						"source.organizeImports.ruff": "explicit"
 					}
-				}
+				},
+				"python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venv/bin/python",
+				"python.testing.pytestEnabled": true,
+				"python.testing.pytestArgs": ["tests"]
 			}
 		}
 	}

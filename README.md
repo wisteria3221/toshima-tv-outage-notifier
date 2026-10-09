@@ -12,7 +12,7 @@
 
 ## 必要要件
 
-- Python 3.13以上
+- Python 3.14以上
 - X Developer アカウント（Free プラン以上）
 
 ## セットアップ

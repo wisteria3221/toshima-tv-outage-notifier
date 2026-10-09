@@ -8,7 +8,7 @@
 
 ## コア技術
 
-- **言語**: Python（`requires-python >= 3.13`）
+- **言語**: Python（`requires-python >= 3.14`）
 - **実行環境**: GitHub Actions（ubuntu-latest）上での無人バッチ実行。ローカルでも CLI 実行可能
 - **パッケージ管理**: uv（`uv.lock` でロック。`uv sync --frozen --all-extras`）
 
@@ -41,7 +41,7 @@
 ## 開発環境
 
 ### 必須ツール
-- uv（依存解決・実行）、Python 3.13+
+- uv（依存解決・実行）、Python 3.14+
 
 ### 主要コマンド
 ```bash

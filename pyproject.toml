@@ -1,7 +1,7 @@
 [project]
 name = "toshima-tv-outage-notifier"
 version = "0.1.0"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dependencies = [
     "requests>=2.31.0",
     "beautifulsoup4>=4.12.0",
@@ -26,8 +26,8 @@ build-backend = "hatchling.build"
 
 # Ruff configuration
 [tool.ruff]
-# Python 3.13 をターゲット
-target-version = "py313"
+# Python 3.14 をターゲット
+target-version = "py314"
 
 # 行の長さ制限（PEP 8 準拠）
 line-length = 88
