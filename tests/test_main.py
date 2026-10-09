@@ -2,7 +2,8 @@
 
 import json
 
-from src.main import main
+from src.main import EXIT_UPSTREAM_UNAVAILABLE, main
+from src.scraper import UpstreamUnavailableError
 from src.state_manager import ChangeResult
 
 
@@ -10,10 +11,22 @@ class TestMainFunction:
     """main() 関数のテスト"""
 
     def test_returns_1_when_no_outages_fetched(self, mocker, tmp_path):
-        """スクレイピングで障害情報が取得できない場合に1を返すこと"""
+        """ページは取得できたが障害情報を1件も解析できない場合に1を返すこと"""
         mocker.patch("src.main.STATE_FILE_PATH", tmp_path / "state.json")
         mocker.patch("src.main.ToshimaScraper.fetch_outage_list", return_value=[])
         assert main() == 1
+
+    def test_returns_2_when_upstream_unavailable(self, mocker, tmp_path):
+        """上流サイトに到達できない場合に2を返し、状態ファイルを作らないこと"""
+        state_path = tmp_path / "state.json"
+        mocker.patch("src.main.STATE_FILE_PATH", state_path)
+        mocker.patch(
+            "src.main.ToshimaScraper.fetch_outage_list",
+            side_effect=UpstreamUnavailableError("timeout"),
+        )
+        assert main() == EXIT_UPSTREAM_UNAVAILABLE
+        assert EXIT_UPSTREAM_UNAVAILABLE == 2
+        assert not state_path.exists()
 
     def test_returns_0_when_no_changes(self, mocker, tmp_path, sample_outage):
         """変更がない場合に0を返すこと"""

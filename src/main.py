@@ -10,8 +10,14 @@ from dotenv import load_dotenv
 
 from .config import LOG_LEVEL, STATE_FILE_PATH
 from .notifier import XNotifier, can_send_notification, should_notify_change
-from .scraper import ToshimaScraper
+from .scraper import ToshimaScraper, UpstreamUnavailableError
 from .state_manager import StateManager
+
+# 終了コード
+# GitHub Actions 側でこの値を見て扱いを変える（check-outage.yml を参照）。
+EXIT_SUCCESS = 0
+EXIT_FAILURE = 1  # 通知失敗・予期しない例外など、気づくべき失敗
+EXIT_UPSTREAM_UNAVAILABLE = 2  # 上流サイトに到達できない（一時的、次回実行で再試行）
 
 # 環境変数の読み込み（.envファイルがあれば）
 load_dotenv()
@@ -62,7 +68,10 @@ def main() -> int:
     """メイン処理
 
     Returns:
-        終了コード（0: 成功、1: エラー）
+        終了コード
+        - EXIT_SUCCESS (0): 成功
+        - EXIT_FAILURE (1): 通知失敗・予期しない例外
+        - EXIT_UPSTREAM_UNAVAILABLE (2): 障害情報ページに到達できない（一時的な要因）
     """
     logger.info("としまテレビ障害情報チェックを開始します")
 
@@ -74,11 +83,19 @@ def main() -> int:
         # 2. 障害情報をスクレイピング
         logger.info("障害情報を取得しています...")
         scraper = ToshimaScraper()
-        outages = scraper.fetch_outage_list(max_pages=1)
+        try:
+            outages = scraper.fetch_outage_list(max_pages=1)
+        except UpstreamUnavailableError as e:
+            # 上流サイトのタイムアウトや DNS 失敗は当プログラムの不具合ではなく、
+            # 状態も変えないので次回実行で自然に再試行される。
+            # 通知失敗（EXIT_FAILURE）とは区別し、ワークフロー側では警告扱いにする。
+            logger.warning(f"障害情報ページに到達できませんでした: {e}")
+            return EXIT_UPSTREAM_UNAVAILABLE
 
         if not outages:
-            logger.warning("障害情報を取得できませんでした")
-            return 1
+            # ページは取れたのに 1 件も解析できない = ページ構造の変更などの恒久的な問題
+            logger.error("障害情報を取得できませんでした（ページ構造が変わった可能性）")
+            return EXIT_FAILURE
 
         logger.info(f"{len(outages)} 件の障害情報を取得しました")
 
@@ -89,7 +106,7 @@ def main() -> int:
         if not changes.has_changes():
             logger.info("新しい障害やステータス変更はありませんでした")
             # 変更がない場合は状態更新も保存もスキップ
-            return 0
+            return EXIT_SUCCESS
 
         logger.info(
             f"変更を検出: 新規障害 {len(changes.new_outages)} 件、"
@@ -101,7 +118,7 @@ def main() -> int:
             logger.warning("月間投稿制限のため通知をスキップします")
             state_manager.update_outages(outages)
             state_manager.save_state()
-            return 0
+            return EXIT_SUCCESS
 
         # 5. 状態を先に更新する
         # mark_notified() は state に存在する障害しかマークしないため、
@@ -161,7 +178,7 @@ def main() -> int:
         # 同時に GitHub Actions のジョブが失敗するため、サイレントな取りこぼしを防ぐ。
         if notification_failed:
             logger.error("通知送信に失敗したため状態を保存せず終了します")
-            return 1
+            return EXIT_FAILURE
 
         # 8. 状態保存
         logger.info("状態を保存しています...")
@@ -177,11 +194,11 @@ def main() -> int:
         else:
             logger.info("通知は送信されませんでした（条件未達成）")
 
-        return 0
+        return EXIT_SUCCESS
 
     except Exception as e:
         logger.exception(f"予期しないエラーが発生しました: {e}")
-        return 1
+        return EXIT_FAILURE
 
 
 if __name__ == "__main__":

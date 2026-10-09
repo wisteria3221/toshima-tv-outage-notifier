@@ -17,8 +17,11 @@ STATE_FILE_PATH = PROJECT_ROOT / "data" / "state.json"
 MONTHLY_TWEET_LIMIT = 450  # Free枠500の90%を安全マージンとして設定
 
 # リトライ設定
-MAX_RETRIES = 3
-BACKOFF_FACTOR = 2  # 指数バックオフの係数
+# としまテレビ側の接続タイムアウトやランナー側の一時的な DNS 失敗が数分続くことがあるため、
+# 5 回試行・待機 1/3/9/27 秒（計 40 秒）で同一実行内に吸収する。
+# 最悪ケースの所要時間は REQUEST_TIMEOUT × MAX_RETRIES + 40 秒 ≒ 3 分強。
+MAX_RETRIES = 5
+BACKOFF_FACTOR = 3  # 指数バックオフの係数（待機秒数 = BACKOFF_FACTOR ** 試行回数）
 
 # タイムアウト設定（秒）
 REQUEST_TIMEOUT = 30

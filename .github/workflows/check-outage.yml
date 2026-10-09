@@ -12,6 +12,11 @@ permissions:
 jobs:
   check-outage:
     runs-on: ubuntu-latest
+    env:
+      # Healthchecks.io の Ping URL（任意）。未設定なら死活報告ステップはスキップされる。
+      # GitHub 側の schedule 間引きやランナー障害で「そもそも起動していない」状態を検知するため、
+      # 成功時のみ通常 ping を送り、一定時間 ping が途絶えたら Healthchecks 側がアラートする。
+      HEALTHCHECKS_URL: ${{ secrets.HEALTHCHECKS_URL }}
 
     steps:
       - name: Checkout repository
@@ -33,18 +38,50 @@ jobs:
         run: uv run pytest -v
 
       - name: Run outage checker
+        id: checker
         env:
           X_API_KEY: ${{ secrets.X_API_KEY }}
           X_API_SECRET: ${{ secrets.X_API_SECRET }}
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
           TZ: Asia/Tokyo
-        run: uv run python -m src.main
+        # 終了コードの意味は src/main.py の EXIT_* 定数を参照
+        #   0: 成功
+        #   1: 通知失敗など気づくべき失敗 → ジョブを失敗させる（状態はコミットされず次回再試行）
+        #   2: としまテレビ側に到達できない（一時的） → 警告のみでジョブは成功扱い
+        run: |
+          code=0
+          uv run python -m src.main || code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -eq 2 ]; then
+            echo "::warning title=Upstream unavailable::としまテレビの障害情報ページに到達できませんでした（タイムアウト/DNS 失敗など）。次回実行で再試行します。"
+            exit 0
+          fi
+          exit "$code"
 
       - name: Commit state changes
+        if: steps.checker.outputs.exit_code == '0'
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add data/state.json
           git diff --staged --quiet || git commit -m "chore: Update outage state [skip ci]"
           git push
+
+      # 死活報告（dead-man's switch）。常に実行し、結果に応じて送り先を変える。
+      #   成功(0)      → 通常 ping（Healthchecks の期限をリセット）
+      #   上流不通(2)  → /log（記録のみ。期限はリセットしないので、長引けば未起動と同様にアラート）
+      #   それ以外     → /fail（即時アラート。Lint/テスト失敗で exit_code が空の場合も含む）
+      - name: Report to Healthchecks.io
+        if: always() && env.HEALTHCHECKS_URL != ''
+        env:
+          EXIT_CODE: ${{ steps.checker.outputs.exit_code }}
+        run: |
+          case "$EXIT_CODE" in
+            0) endpoint="" ;;
+            2) endpoint="/log" ;;
+            *) endpoint="/fail" ;;
+          esac
+          curl -fsS -m 10 --retry 3 -o /dev/null \
+            --data-raw "run_id=${GITHUB_RUN_ID} exit_code=${EXIT_CODE:-none}" \
+            "${HEALTHCHECKS_URL}${endpoint}"

@@ -83,6 +83,10 @@ X_ACCESS_TOKEN_SECRET=your_access_token_secret_here
 - `X_ACCESS_TOKEN`
 - `X_ACCESS_TOKEN_SECRET`
 
+任意（未起動検知用、後述）:
+
+- `HEALTHCHECKS_URL`
+
 ## 使い方
 
 ### ローカルで実行
@@ -102,6 +106,28 @@ DRY_RUN=true uv run python -m src.main
 リポジトリを GitHub にプッシュすると、30分ごとに自動実行されます。
 
 手動実行する場合は、Actions タブから「Check Toshima TV Outage」ワークフローを選択し、「Run workflow」をクリック。
+
+#### 実行結果の見方
+
+| 終了コード | 意味 | Actions 上の表示 |
+|---|---|---|
+| 0 | 成功 | 緑 |
+| 2 | としまテレビ側に到達できない（タイムアウト/DNS 失敗など一時的な要因） | 緑＋警告アノテーション。状態は保存されず次回実行で再試行 |
+| 1 | 通知失敗・ページ解析不能・予期しない例外 | 赤。状態は保存されず次回実行で再試行 |
+
+#### 未起動の検知（Healthchecks.io、任意）
+
+GitHub Actions の `schedule` はベストエフォートで、高負荷時には遅延・間引きされます（実績では 1 日 48 回想定に対し 4〜7 回しか起動しない期間がありました）。
+起動しなかった実行は履歴に残らないため、Actions タブを見ても気づけません。
+[Healthchecks.io](https://healthchecks.io/)（無料枠あり）に成功時だけ ping を送り、一定時間 ping が途絶えたらアラートを受け取る仕組みを用意しています。
+
+1. Healthchecks.io でチェックを作成し、Period を `30 minutes`、Grace Time を `1 hour` 程度に設定する
+2. 表示された Ping URL（`https://hc-ping.com/<uuid>` 形式）をリポジトリのシークレット `HEALTHCHECKS_URL` に登録する
+3. 通知先（メール、Slack、Discord など）を Healthchecks 側で設定する
+
+シークレット未設定の場合、このステップはスキップされます。
+終了コード 2（上流不通）のときは `/log` に記録のみ送り、期限はリセットしません。上流不通が長引いた場合も未起動と同様にアラートされます。
+終了コード 1 や Lint/テスト失敗のときは `/fail` に送るので即時アラートになります。
 
 ## ディレクトリ構成
 

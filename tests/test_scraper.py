@@ -6,8 +6,14 @@ import pytest
 import requests
 import responses as responses_lib
 
-from src.config import TOSHIMA_TROUBLE_URL
-from src.scraper import OutageInfo, ToshimaScraper
+from src.config import BACKOFF_FACTOR, MAX_RETRIES, TOSHIMA_TROUBLE_URL
+from src.scraper import OutageInfo, ToshimaScraper, UpstreamUnavailableError
+
+
+@pytest.fixture(autouse=True)
+def no_sleep(mocker):
+    """リトライのバックオフ待機（合計 40 秒）をテストでは省略する"""
+    return mocker.patch("src.scraper.time.sleep")
 
 
 @pytest.fixture
@@ -147,7 +153,7 @@ class TestFetchWithRetry:
     @responses_lib.activate
     def test_returns_none_on_http_error(self, scraper):
         """HTTPエラー（404）の場合にNoneを返すこと（リトライ後）"""
-        for _ in range(3):
+        for _ in range(MAX_RETRIES):
             responses_lib.add(
                 responses_lib.GET,
                 TOSHIMA_TROUBLE_URL,
@@ -157,9 +163,9 @@ class TestFetchWithRetry:
         assert result is None
 
     @responses_lib.activate
-    def test_returns_none_after_all_connection_failures(self, scraper):
+    def test_returns_none_after_all_connection_failures(self, scraper, no_sleep):
         """接続エラーがリトライ回数分続いた場合にNoneを返すこと"""
-        for _ in range(3):
+        for _ in range(MAX_RETRIES):
             responses_lib.add(
                 responses_lib.GET,
                 TOSHIMA_TROUBLE_URL,
@@ -167,6 +173,28 @@ class TestFetchWithRetry:
             )
         result = scraper._fetch_with_retry(TOSHIMA_TROUBLE_URL)
         assert result is None
+        assert len(responses_lib.calls) == MAX_RETRIES
+        # 待機は試行間のみ（最終試行後は待たない）、指数バックオフ 1/3/9/27 秒
+        waits = [c.args[0] for c in no_sleep.call_args_list]
+        assert waits == [BACKOFF_FACTOR**i for i in range(MAX_RETRIES - 1)]
+
+    @responses_lib.activate
+    def test_recovers_when_later_attempt_succeeds(self, scraper):
+        """途中の試行で成功すればHTMLを返すこと"""
+        responses_lib.add(
+            responses_lib.GET,
+            TOSHIMA_TROUBLE_URL,
+            body=requests.exceptions.ConnectionError("接続失敗"),
+        )
+        responses_lib.add(
+            responses_lib.GET,
+            TOSHIMA_TROUBLE_URL,
+            body="<html><body>recovered</body></html>",
+            status=200,
+        )
+        result = scraper._fetch_with_retry(TOSHIMA_TROUBLE_URL)
+        assert result is not None
+        assert "recovered" in result
 
 
 class TestFetchOutageList:
@@ -187,13 +215,33 @@ class TestFetchOutageList:
         assert all(isinstance(o, OutageInfo) for o in outages)
 
     @responses_lib.activate
-    def test_returns_empty_list_when_fetch_fails(self, scraper):
-        """フェッチ失敗時に空リストを返すこと"""
-        for _ in range(3):
+    def test_raises_when_first_page_fetch_fails(self, scraper):
+        """1ページ目のフェッチ失敗時に UpstreamUnavailableError を送出すること"""
+        for _ in range(MAX_RETRIES):
             responses_lib.add(
                 responses_lib.GET,
                 TOSHIMA_TROUBLE_URL,
                 status=500,
             )
-        outages = scraper.fetch_outage_list()
-        assert outages == []
+        with pytest.raises(UpstreamUnavailableError):
+            scraper.fetch_outage_list()
+
+    @responses_lib.activate
+    def test_returns_first_page_when_second_page_fetch_fails(
+        self, scraper, sample_list_html
+    ):
+        """2ページ目以降の失敗は例外にせず、取得済みの結果を返すこと"""
+        responses_lib.add(
+            responses_lib.GET,
+            TOSHIMA_TROUBLE_URL,
+            body=sample_list_html,
+            status=200,
+            content_type="text/html; charset=utf-8",
+        )
+        responses_lib.add(
+            responses_lib.GET,
+            f"{TOSHIMA_TROUBLE_URL}page/2/",
+            status=500,
+        )
+        outages = scraper.fetch_outage_list(max_pages=2)
+        assert len(outages) > 0

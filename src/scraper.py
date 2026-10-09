@@ -44,6 +44,15 @@ _RE_AREA_KEYWORD = re.compile(_AREA_KEYWORDS)
 _RE_AREA_IN_BRACKETS = re.compile(rf"[（(]([^）)]*(?:{_AREA_KEYWORDS})[^）)]*)[）)]")
 
 
+class UpstreamUnavailableError(Exception):
+    """障害情報ページ自体を取得できなかったことを表す例外
+
+    リトライを使い切っても としまテレビ側に接続できない／ランナー側で名前解決できない
+    といった一時的なネットワーク要因で発生する。プログラムの不具合や通知失敗とは
+    区別して扱う（main では終了コード 2 を返す）。
+    """
+
+
 @dataclass
 class OutageInfo:
     """障害情報データクラス"""
@@ -74,6 +83,9 @@ class ToshimaScraper:
 
         Returns:
             障害情報のリスト
+
+        Raises:
+            UpstreamUnavailableError: 1 ページ目をリトライ後も取得できなかった場合
         """
         all_outages = []
 
@@ -86,6 +98,12 @@ class ToshimaScraper:
 
             html = self._fetch_with_retry(url)
             if html is None:
+                if page == 1:
+                    # 1 ページ目すら取れない = 上流サイトに到達できない状態。
+                    # 空リスト（= パース結果が空）とは区別するため例外で通知する。
+                    raise UpstreamUnavailableError(
+                        f"障害情報ページを取得できません: {url}"
+                    )
                 logger.warning(f"ページ {page} の取得に失敗しました")
                 break
 
