@@ -19,8 +19,18 @@
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
 
+	// Claude Code の設定・認証情報をボリュームに永続化し、リビルド後の再ログインを不要にする
+	// CLAUDE_CONFIG_DIR を指定すると ~/.claude.json もこのディレクトリ内に保存される
+	"mounts": [
+		"source=claude-code-config-${devcontainerId},target=/home/vscode/.claude,type=volume"
+	],
+	"containerEnv": {
+		"CLAUDE_CONFIG_DIR": "/home/vscode/.claude"
+	},
+
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "uv sync --all-extras",
+	// ボリュームは root 所有で作成されるため、所有者を vscode に修正する
+	"postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.claude && uv sync --all-extras",
 
 	// Configure tool-specific properties.
 	"customizations": {
