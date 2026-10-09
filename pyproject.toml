@@ -26,9 +26,6 @@ build-backend = "hatchling.build"
 
 # Ruff configuration
 [tool.ruff]
-# Python 3.14 をターゲット
-target-version = "py314"
-
 # 行の長さ制限（PEP 8 準拠）
 line-length = 88
 

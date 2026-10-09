@@ -3,7 +3,7 @@
 {
 	"name": "toshima-tv-outage-notifier",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	// Python のバージョンは pyproject.toml / CI (check-outage.yml) と揃える
+	// Python のバージョンは .python-version と揃える（CI は .python-version を uv 経由で参照）
 	"image": "mcr.microsoft.com/devcontainers/python:3.14",
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
@@ -42,8 +42,7 @@
 					}
 				},
 				"python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venv/bin/python",
-				"python.testing.pytestEnabled": true,
-				"python.testing.pytestArgs": ["tests"]
+				"python.testing.pytestEnabled": true
 			}
 		}
 	}
