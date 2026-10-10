@@ -199,6 +199,62 @@ class TestMainFunction:
         assert ng.id not in state["outages"]
         assert state["stats"]["total_notifications_this_month"] == 1
 
+    def test_monthly_limit_is_enforced_within_a_single_run(self, mocker, tmp_path):
+        """残り 1 件の状態で新規が 2 件あっても、上限を超えて送らないこと
+
+        can_send_notification はループ前にも評価されるが、1 回の実行で複数件送ると
+        その間にカウンタが進むため、1 件ごとに再確認しないと上限を超えてしまう。
+        """
+        from datetime import UTC, datetime
+
+        from src.config import MONTHLY_TWEET_LIMIT
+
+        state_file = tmp_path / "state.json"
+        mocker.patch("src.main.STATE_FILE_PATH", state_file)
+        mocker.patch("src.notifier.DRY_RUN", True)
+        state_file.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.1",
+                    "outages": {},
+                    "stats": {
+                        "total_notifications_this_month": MONTHLY_TWEET_LIMIT - 1,
+                        "month": datetime.now(UTC).strftime("%Y-%m"),
+                    },
+                }
+            )
+        )
+        first = OutageInfo(
+            id="1",
+            date="2025.12.20",
+            status="",
+            title="送られる障害",
+            area="",
+            url="https://www.toshima.co.jp/trouble/detail/1",
+        )
+        second = OutageInfo(
+            id="2",
+            date="2025.12.21",
+            status="",
+            title="上限で止まる障害",
+            area="",
+            url="https://www.toshima.co.jp/trouble/detail/2",
+        )
+        mocker.patch(
+            "src.main.ToshimaScraper.fetch_outage_list", return_value=[first, second]
+        )
+        notify = mocker.patch("src.main.XNotifier.notify_new_outage", return_value=True)
+
+        assert main() == 0
+
+        notify.assert_called_once()
+        assert notify.call_args.args[0].id == first.id
+        state = json.loads(state_file.read_text())
+        assert state["stats"]["total_notifications_this_month"] == MONTHLY_TWEET_LIMIT
+        assert state["outages"][first.id]["notified_statuses"] == [""]
+        # 上限で止まった分は状態には保存されるが通知済みにはならない（既存仕様と同じ）
+        assert state["outages"][second.id]["notified_statuses"] == []
+
     def test_status_change_is_notified_and_marked(
         self, mocker, tmp_path, sample_outage
     ):

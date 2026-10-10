@@ -54,8 +54,12 @@ def _process_notification(
         "failed": 投稿を試みたが失敗した（リトライ対象）
     """
     # 通知可否判定 → 投稿 → 通知済みマーク → カウンタ加算 の順序を保つ。
-    # should_notify_change が False の場合は意図的なスキップ（"skipped"）、
-    # 投稿が失敗した場合は "failed" として呼び出し側でエラー扱いする。
+    # can_send_notification / should_notify_change が False の場合は意図的なスキップ
+    # （"skipped"）、投稿が失敗した場合は "failed" として呼び出し側でエラー扱いする。
+    # 月間上限はループ前にも見ているが、1 回の実行で複数件送るとその間にカウンタが
+    # 進むため、1 件ごとに再確認して上限を超えないようにする。
+    if not can_send_notification(state_manager):
+        return "skipped"
     if not should_notify_change(state_manager, change_type):
         return "skipped"
     # tweepy は接続エラーやタイムアウトを TweepyException に包まず requests の例外のまま

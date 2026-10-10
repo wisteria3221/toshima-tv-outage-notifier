@@ -117,7 +117,7 @@ npx cc-sdd@latest --claude-skills --lang ja
 - システムは安全マージンとして月450ツイートに制限（`MONTHLY_TWEET_LIMIT`、Free枠500の90%）
 - しきい値は定数化（`_RATE_LIMIT_CRITICAL_RATIO=0.96`, `_RATE_LIMIT_REDUCED_RATIO=0.90`）
 - 90%以上使用時: 新規障害のみ通知し、ステータス変更は**破棄**する（`"skipped"`。`update_outages()` で新ステータスが保存されるため、翌月カウンタがリセットされても再検出されない。README の「翌月に遡って通知されることはない」はこの仕様）。96% のしきい値も現状は同じ挙動で、将来の段階的制限用に分けてある
-- 送信可否は `can_send_notification()`、変更種別ごとの絞り込みは `should_notify_change()` を参照
+- 送信可否は `can_send_notification()`、変更種別ごとの絞り込みは `should_notify_change()` を参照。どちらも `_process_notification()` で **1 件ごと**に評価する（ループ前の `can_send_notification()` は早期終了用。1 回の実行で複数件送るとカウンタが進むため、件ごとに見ないと上限を超える）
 
 ### 変更検出ロジック
 
