@@ -152,6 +152,15 @@ class XNotifier:
         Returns:
             フォーマットされたメッセージ
         """
+        # 初めて検出した時点で既にステータスが付いている障害（30 分の間に発生と復旧が
+        # 済んだもの、状態ファイル初期化後の過去エントリなど）は、そのステータスを
+        # 反映して通知する。進行中として通知すると、その後の復旧通知が出ないまま
+        # （検出時のステータスが通知済みになるため）利用者に誤った状況が伝わる。
+        header, title_line_format = self._header_and_title_format(
+            status=outage.status,
+            default_header="【としまテレビ 障害情報】",
+        )
+
         fixed_lines = []
         if outage.date:
             fixed_lines.append(f"日時: {outage.date}")
@@ -160,9 +169,9 @@ class XNotifier:
         fixed_lines.append(f"詳細: {outage.url}")
 
         return self._compose_message(
-            header="【としまテレビ 障害情報】",
+            header=header,
             title=outage.title,
-            title_line_format="{title}",
+            title_line_format=title_line_format,
             fixed_lines=fixed_lines,
         )
 
@@ -176,15 +185,12 @@ class XNotifier:
             フォーマットされたメッセージ
         """
         outage = change.outage
-        new_status = change.new_status or "進行中"
 
-        # ステータスに応じてヘッダーを変更
-        if new_status in _RESOLUTION_STATUSES:
-            header = f"【としまテレビ {new_status}情報】"
-            title_line_format = f"{{title}} が{new_status}しました"
-        else:
-            header = "【としまテレビ 障害情報更新】"
-            title_line_format = f"{{title}}（{new_status}）"
+        # 括弧なし（進行中）へ戻った場合もステータス変更として明示する
+        header, title_line_format = self._header_and_title_format(
+            status=change.new_status or "進行中",
+            default_header="【としまテレビ 障害情報更新】",
+        )
 
         fixed_lines = []
         if outage.area:
@@ -197,6 +203,23 @@ class XNotifier:
             title_line_format=title_line_format,
             fixed_lines=fixed_lines,
         )
+
+    @staticmethod
+    def _header_and_title_format(status: str, default_header: str) -> tuple[str, str]:
+        """ステータスに応じたヘッダーとタイトル行の書式を返す
+
+        Args:
+            status: 障害のステータス（空文字は「ステータス表記なし」）
+            default_header: 解決系ステータス以外で使うヘッダー
+
+        Returns:
+            (ヘッダー, タイトル行の書式) のタプル。書式は ``{title}`` を含む
+        """
+        if status in _RESOLUTION_STATUSES:
+            return f"【としまテレビ {status}情報】", f"{{title}} が{status}しました"
+        if status:
+            return default_header, f"{{title}}（{status}）"
+        return default_header, "{title}"
 
     def _compose_message(
         self,

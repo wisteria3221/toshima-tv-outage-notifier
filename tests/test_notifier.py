@@ -90,6 +90,52 @@ class TestFormatNewOutageMessage:
         message = notifier._format_new_outage_message(sample_outage)
         assert sample_outage.url in message
 
+    def test_resolved_status_on_new_outage_uses_resolution_header(self, sample_outage):
+        """初検出時に既に「復旧」の障害は復旧ヘッダーで通知されること
+
+        進行中として通知すると、復旧ステータスが通知済みになり続報が出ない。
+        """
+        notifier = XNotifier.__new__(XNotifier)
+        notifier.client = None
+        resolved = OutageInfo(
+            id=sample_outage.id,
+            date=sample_outage.date,
+            status="復旧",
+            title=sample_outage.title,
+            area=sample_outage.area,
+            url=sample_outage.url,
+        )
+        message = notifier._format_new_outage_message(resolved)
+        lines = message.split("\n")
+        assert lines[0] == "【としまテレビ 復旧情報】"
+        assert lines[1] == f"{sample_outage.title} が復旧しました"
+        assert f"日時: {sample_outage.date}" in lines
+
+    def test_other_status_on_new_outage_is_appended_to_title(self, sample_outage):
+        """初検出時に「仮復旧」など解決系以外のステータスがタイトルに付記されること"""
+        notifier = XNotifier.__new__(XNotifier)
+        notifier.client = None
+        partial = OutageInfo(
+            id=sample_outage.id,
+            date=sample_outage.date,
+            status="仮復旧",
+            title=sample_outage.title,
+            area=sample_outage.area,
+            url=sample_outage.url,
+        )
+        message = notifier._format_new_outage_message(partial)
+        lines = message.split("\n")
+        assert lines[0] == "【としまテレビ 障害情報】"
+        assert lines[1] == f"{sample_outage.title}（仮復旧）"
+
+    def test_empty_status_on_new_outage_shows_plain_title(self, sample_outage):
+        """ステータスなし（進行中）の新規障害はタイトルだけが表示されること"""
+        notifier = XNotifier.__new__(XNotifier)
+        notifier.client = None
+        assert sample_outage.status == ""
+        message = notifier._format_new_outage_message(sample_outage)
+        assert message.split("\n")[1] == sample_outage.title
+
 
 class TestFormatStatusChangeMessage:
     """ステータス変更メッセージフォーマットのテスト"""
