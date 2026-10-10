@@ -58,7 +58,15 @@ def _process_notification(
     # 投稿が失敗した場合は "failed" として呼び出し側でエラー扱いする。
     if not should_notify_change(state_manager, change_type):
         return "skipped"
-    if not notify():
+    # tweepy は接続エラーやタイムアウトを TweepyException に包まず requests の例外のまま
+    # 投げる。ここで捕捉せずに main() の外側まで抜けると状態が保存されず、同じ実行で
+    # 成功した通知のマークも失われて次回二重投稿になるため、"failed" として扱う。
+    try:
+        sent = notify()
+    except Exception:
+        logger.exception("投稿処理で予期しない例外が発生しました")
+        sent = False
+    if not sent:
         return "failed"
     state_manager.mark_notified(outage_id, status)
     state_manager.increment_notification_count()

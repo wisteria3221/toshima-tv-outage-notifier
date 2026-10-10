@@ -3,6 +3,7 @@
 import logging
 import re
 
+import requests
 import tweepy
 
 from .config import (
@@ -310,7 +311,8 @@ class XNotifier:
             logger.info(f"ツイートを投稿しました: ID={tweet_id}")
             return True
 
-        except tweepy.TweepyException as e:
+        except (tweepy.TweepyException, requests.RequestException) as e:
+            # tweepy は接続エラー等を requests の例外のまま投げるため両方を捕捉する
             logger.error(f"ツイート投稿に失敗: {e}")
             return False
 

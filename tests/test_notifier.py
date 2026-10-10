@@ -1,6 +1,8 @@
 """通知モジュールのテスト"""
 
 import pytest
+import requests
+import tweepy
 
 from src.notifier import (
     XNotifier,
@@ -360,6 +362,34 @@ class TestShouldNotifyChange:
         for _ in range(432):
             manager.increment_notification_count()
         assert should_notify_change(manager, "status_change") is False
+
+
+class TestPostTweetErrors:
+    """投稿時のエラーハンドリングのテスト"""
+
+    def _notifier_with_failing_client(self, mocker, exc):
+        mocker.patch("src.notifier.DRY_RUN", False)
+        notifier = XNotifier.__new__(XNotifier)
+        notifier.client = mocker.Mock()
+        notifier.client.create_tweet.side_effect = exc
+        return notifier
+
+    def test_tweepy_exception_returns_false(self, mocker):
+        """tweepy の例外は False を返すこと"""
+        notifier = self._notifier_with_failing_client(
+            mocker, tweepy.TweepyException("api error")
+        )
+        assert notifier._post_tweet("hello") is False
+
+    def test_requests_exception_returns_false(self, mocker):
+        """requests の接続エラーも例外を伝播させず False を返すこと
+
+        tweepy は接続エラーを TweepyException に包まないため、個別に捕捉が必要。
+        """
+        notifier = self._notifier_with_failing_client(
+            mocker, requests.exceptions.ConnectionError("network down")
+        )
+        assert notifier._post_tweet("hello") is False
 
 
 class TestXNotifierDryRun:

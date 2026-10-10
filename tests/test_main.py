@@ -157,6 +157,48 @@ class TestMainFunction:
         assert ng.id not in state["outages"]
         assert state["stats"]["total_notifications_this_month"] == 1
 
+    def test_exception_during_notify_is_treated_as_failure(self, mocker, tmp_path):
+        """投稿関数が例外を投げても、成功分を保存し失敗分だけ巻き戻して 1 を返すこと
+
+        tweepy は接続エラーを requests の例外のまま投げる。以前はこれが main() の
+        外側まで抜けて状態が保存されず、同じ実行で成功した通知のマークも失われて
+        次回二重投稿になっていた。
+        """
+        state_file = tmp_path / "state.json"
+        mocker.patch("src.main.STATE_FILE_PATH", state_file)
+        ok = OutageInfo(
+            id="1",
+            date="2025.12.20",
+            status="",
+            title="成功する障害",
+            area="",
+            url="https://www.toshima.co.jp/trouble/detail/1",
+        )
+        ng = OutageInfo(
+            id="2",
+            date="2025.12.21",
+            status="",
+            title="例外になる障害",
+            area="",
+            url="https://www.toshima.co.jp/trouble/detail/2",
+        )
+        mocker.patch("src.main.ToshimaScraper.fetch_outage_list", return_value=[ok, ng])
+        mocker.patch("src.main.can_send_notification", return_value=True)
+
+        def notify(outage):
+            if outage.id == ng.id:
+                raise ConnectionError("network down")
+            return True
+
+        mocker.patch("src.main.XNotifier.notify_new_outage", side_effect=notify)
+
+        assert main() == 1
+
+        state = json.loads(state_file.read_text())
+        assert state["outages"][ok.id]["notified_statuses"] == [""]
+        assert ng.id not in state["outages"]
+        assert state["stats"]["total_notifications_this_month"] == 1
+
     def test_status_change_is_notified_and_marked(
         self, mocker, tmp_path, sample_outage
     ):
