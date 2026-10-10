@@ -55,7 +55,8 @@ jobs:
           TZ: Asia/Tokyo
         # 終了コードの意味は src/main.py の EXIT_* 定数を参照
         #   0: 成功
-        #   1: 通知失敗など気づくべき失敗 → ジョブを失敗させる（状態はコミットされず次回再試行）
+        #   1: 通知失敗など気づくべき失敗 → ジョブを失敗させる
+        #      （通知に成功した分の状態は保存されているのでコミットし、失敗分は次回再試行）
         #   2: としまテレビ側に到達できない（一時的） → 警告のみでジョブは成功扱い
         run: |
           code=0
@@ -67,8 +68,11 @@ jobs:
           fi
           exit "$code"
 
+      # 終了コード 1 でもコミットする。部分失敗時に成功した通知のマークを捨てると、
+      # 次回実行で同じ障害を二重投稿してしまうため。
+      # 終了コード 2（上流不通）やステップ自体の異常終了（exit_code 未設定）ではコミットしない。
       - name: Commit state changes
-        if: steps.checker.outputs.exit_code == '0'
+        if: ${{ !cancelled() && contains(fromJSON('["0", "1"]'), steps.checker.outputs.exit_code) }}
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"

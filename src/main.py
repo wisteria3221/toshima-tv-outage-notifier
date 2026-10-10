@@ -16,7 +16,9 @@ from .state_manager import StateManager
 # 終了コード
 # GitHub Actions 側でこの値を見て扱いを変える（check-outage.yml を参照）。
 EXIT_SUCCESS = 0
-EXIT_FAILURE = 1  # 通知失敗・予期しない例外など、気づくべき失敗
+EXIT_FAILURE = (
+    1  # 通知失敗・予期しない例外など、気づくべき失敗（状態は保存済みの場合がある）
+)
 EXIT_UPSTREAM_UNAVAILABLE = 2  # 上流サイトに到達できない（一時的、次回実行で再試行）
 
 # 環境変数の読み込み（.envファイルがあれば）
@@ -124,13 +126,15 @@ def main() -> int:
         # mark_notified() は state に存在する障害しかマークしないため、
         # 通知ループの前に新規障害を state へ登録しておく必要がある。
         # （これより前に呼ぶと新規障害の notified_statuses が常に空のままになる）
+        # 通知に失敗した障害だけを後で巻き戻せるよう、更新前の状態を控えておく。
+        snapshot = state_manager.snapshot_outages()
         state_manager.update_outages(outages)
 
         # 6. 通知送信
         logger.info("通知を送信しています...")
         notifier = XNotifier()
         notification_sent = False
-        notification_failed = False
+        failed_outage_ids: list[str] = []
 
         # 新規障害の通知
         for outage in changes.new_outages:
@@ -146,7 +150,7 @@ def main() -> int:
                 notification_sent = True
                 logger.info(f"新規障害を通知しました: {outage.title}")
             elif result == "failed":
-                notification_failed = True
+                failed_outage_ids.append(outage.id)
                 logger.error(f"新規障害の通知に失敗しました: {outage.title}")
 
         # ステータス変更の通知
@@ -166,19 +170,18 @@ def main() -> int:
                     f"({change.old_status or '進行中'} -> {change.new_status or '進行中'})"
                 )
             elif result == "failed":
-                notification_failed = True
+                failed_outage_ids.append(change.outage.id)
                 logger.error(
                     f"ステータス変更の通知に失敗しました: {change.outage.title} "
                     f"({change.old_status or '進行中'} -> {change.new_status or '進行中'})"
                 )
 
-        # 7. 通知失敗時はエラー終了する
-        # 状態を保存・コミットせずに exit 1 することで、未通知の障害が次回実行で
-        # 再度「新規」または「ステータス変更」として検出されリトライされる。
-        # 同時に GitHub Actions のジョブが失敗するため、サイレントな取りこぼしを防ぐ。
-        if notification_failed:
-            logger.error("通知送信に失敗したため状態を保存せず終了します")
-            return EXIT_FAILURE
+        # 7. 通知に失敗した障害だけを更新前の状態に巻き戻す
+        # 失敗分を state から外して保存することで、次回実行で再度「新規」または
+        # 「ステータス変更」として検出されリトライされる。成功分のマークとカウンタは
+        # 保存するので、同じ実行内で成功した通知が次回二重に投稿されることはない。
+        if failed_outage_ids:
+            state_manager.rollback_outages(failed_outage_ids, snapshot)
 
         # 8. 状態保存
         logger.info("状態を保存しています...")
@@ -188,6 +191,15 @@ def main() -> int:
             logger.info("状態ファイルを保存しました")
         else:
             logger.info("状態に変更がないため保存をスキップしました")
+
+        # 9. 通知失敗があればエラー終了する
+        # GitHub Actions のジョブが失敗するため、サイレントな取りこぼしを防ぐ。
+        # 状態はすでに保存済みで、ワークフローは終了コード 1 でもコミットする。
+        if failed_outage_ids:
+            logger.error(
+                f"{len(failed_outage_ids)} 件の通知に失敗しました（次回実行で再試行）"
+            )
+            return EXIT_FAILURE
 
         if notification_sent:
             logger.info("通知処理が完了しました")

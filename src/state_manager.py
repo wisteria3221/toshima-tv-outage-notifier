@@ -1,7 +1,9 @@
 """状態管理モジュール"""
 
+import copy
 import json
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -214,6 +216,35 @@ class StateManager:
                 }
 
         self.state["outages"] = stored_outages
+
+    def snapshot_outages(self) -> dict:
+        """障害エントリの現在の状態を複製して返す（rollback_outages 用）
+
+        Returns:
+            outages 辞書のディープコピー
+        """
+        return copy.deepcopy(self.state.get("outages", {}))
+
+    def rollback_outages(self, outage_ids: Iterable[str], snapshot: dict) -> None:
+        """指定した障害エントリを snapshot 時点の内容に戻す
+
+        通知に失敗した障害だけを update_outages() 前の状態に戻し、次回実行で
+        再び「新規」または「ステータス変更」として検出されるようにする。
+        snapshot に存在しなかった ID（新規障害）はエントリごと削除する。
+
+        Args:
+            outage_ids: 戻す対象の障害ID
+            snapshot: snapshot_outages() の戻り値
+        """
+        outages = self.state.get("outages", {})
+        for outage_id in outage_ids:
+            if outage_id in snapshot:
+                outages[outage_id] = copy.deepcopy(snapshot[outage_id])
+            else:
+                outages.pop(outage_id, None)
+            self._mark_dirty()
+            logger.debug(f"障害エントリを巻き戻し: ID={outage_id}")
+        self.state["outages"] = outages
 
     def mark_notified(self, outage_id: str, status: str) -> None:
         """ステータスを通知済みとしてマーク

@@ -296,9 +296,10 @@ class TestDirtyFlag:
 
         manager = StateManager(temp_state_file)
 
-        # 前月の状態を設定
+        # 現在月と必ず異なる過去の月を設定する
         current_month = datetime.now(UTC).strftime("%Y-%m")
-        prev_month = "2025-11"  # 前月を仮定
+        prev_month = "2000-01"
+        assert prev_month != current_month
 
         manager.state["stats"] = {
             "month": prev_month,
@@ -315,11 +316,80 @@ class TestDirtyFlag:
         # update_outagesを呼ぶと月チェックが走る
         manager2.update_outages([])
 
-        # 月が変わっていればdirty
-        if current_month != prev_month:
-            assert manager2.is_dirty()
-            assert manager2.state["stats"]["month"] == current_month
-            assert manager2.state["stats"]["total_notifications_this_month"] == 0
+        # 月が変わっているのでdirty
+        assert manager2.is_dirty()
+        assert manager2.state["stats"]["month"] == current_month
+        assert manager2.state["stats"]["total_notifications_this_month"] == 0
+
+
+class TestRollbackOutages:
+    """rollback_outages のテスト"""
+
+    def test_new_outage_is_removed(self, temp_state_file, sample_outage):
+        """snapshot に無い新規障害はエントリごと削除されること"""
+        manager = StateManager(temp_state_file)
+        snapshot = manager.snapshot_outages()
+        manager.update_outages([sample_outage])
+        manager.mark_notified(sample_outage.id, sample_outage.status)
+
+        manager.rollback_outages([sample_outage.id], snapshot)
+
+        assert sample_outage.id not in manager.state["outages"]
+
+    def test_existing_outage_is_restored(self, temp_state_file, sample_outage):
+        """snapshot にある障害は更新前の内容（ステータス・通知履歴）に戻ること"""
+        manager = StateManager(temp_state_file)
+        manager.update_outages([sample_outage])
+        manager.mark_notified(sample_outage.id, "")
+        snapshot = manager.snapshot_outages()
+
+        resolved = OutageInfo(
+            id=sample_outage.id,
+            date=sample_outage.date,
+            status="復旧",
+            title=sample_outage.title,
+            area=sample_outage.area,
+            url=sample_outage.url,
+        )
+        manager.update_outages([resolved])
+        manager.mark_notified(sample_outage.id, "復旧")
+
+        manager.rollback_outages([sample_outage.id], snapshot)
+
+        stored = manager.state["outages"][sample_outage.id]
+        assert stored["status"] == ""
+        assert stored["notified_statuses"] == [""]
+
+    def test_other_outages_are_untouched(self, temp_state_file, sample_outage):
+        """対象外の障害は巻き戻しの影響を受けないこと"""
+        manager = StateManager(temp_state_file)
+        snapshot = manager.snapshot_outages()
+        other = OutageInfo(
+            id="200",
+            date="2025.12.21",
+            status="",
+            title="別の障害",
+            area="",
+            url="https://www.toshima.co.jp/trouble/detail/200",
+        )
+        manager.update_outages([sample_outage, other])
+        manager.mark_notified(other.id, "")
+
+        manager.rollback_outages([sample_outage.id], snapshot)
+
+        assert sample_outage.id not in manager.state["outages"]
+        assert manager.state["outages"][other.id]["notified_statuses"] == [""]
+
+    def test_snapshot_is_not_mutated_by_later_updates(
+        self, temp_state_file, sample_outage
+    ):
+        """snapshot が後続の update_outages の影響を受けないこと（ディープコピー）"""
+        manager = StateManager(temp_state_file)
+        manager.update_outages([sample_outage])
+        snapshot = manager.snapshot_outages()
+        manager.mark_notified(sample_outage.id, "")
+
+        assert snapshot[sample_outage.id]["notified_statuses"] == []
 
 
 class TestChangeResult:
