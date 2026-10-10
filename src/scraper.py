@@ -34,8 +34,10 @@ _RE_DETAIL_ID = re.compile(r"/trouble/detail/(\d+)")
 # 日付抽出（YYYY.MM.DD形式）
 _RE_DATE = re.compile(r"(\d{4}\.\d{2}\.\d{2})")
 
-# ステータス抽出（日付の後に続く最初の括弧内テキスト）
-_RE_STATUS = re.compile(r"(?:\d{4}\.\d{2}\.\d{2})?\s*[（(]([^）)]+)[）)]")
+# ステータス抽出（テキスト先頭の日付直後に続く括弧内テキストのみ）
+# 先頭に固定しないと、タイトル途中の括弧（例「サービス停波（STB）について」）を
+# ステータスとして誤認する。実サイトではステータスは常に日付直後に置かれている。
+_RE_STATUS = re.compile(r"^\s*(?:\d{4}\.\d{2}\.\d{2})?\s*[（(]([^）)]+)[）)]")
 
 # ステータスが地域情報でないことを確認する否定判定用
 _RE_AREA_KEYWORD = re.compile(_AREA_KEYWORDS)
@@ -262,9 +264,10 @@ class ToshimaScraper:
         Returns:
             ステータス文字列（終了/復旧/完了等）、なければ空文字
         """
-        # 日付の後に続く括弧内のステータスを探す
+        # テキスト先頭の日付直後に続く括弧内のステータスを探す
         # 例: "2025.12.09（終了）緊急メンテナンス..."
-        status_match = _RE_STATUS.search(text)
+        # タイトル途中の括弧はステータスではないので見ない
+        status_match = _RE_STATUS.match(text)
 
         if status_match:
             status = status_match.group(1)

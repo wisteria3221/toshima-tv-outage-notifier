@@ -118,6 +118,21 @@ class TestExtractStatus:
         text = "2025.12.01（池袋1丁目付近）障害発生"
         assert scraper._extract_status(text) == ""
 
+    def test_extract_status_ignores_bracket_inside_title(self, scraper):
+        """タイトル途中の括弧（例: STB）をステータスとして誤認しない"""
+        text = "2025.12.09 サービス停波（STB）について"
+        assert scraper._extract_status(text) == ""
+
+    def test_extract_status_without_date_prefix(self, scraper):
+        """日付が無くても先頭の括弧はステータスとして扱う"""
+        text = "（復旧）通信障害"
+        assert scraper._extract_status(text) == "復旧"
+
+    def test_extract_status_with_space_after_date(self, scraper):
+        """日付と括弧の間に空白があっても抽出できる"""
+        text = "2025.12.09 （終了）緊急メンテナンス"
+        assert scraper._extract_status(text) == "終了"
+
 
 class TestExtractTitleAndArea:
     """タイトルと地域抽出のテスト"""
@@ -136,6 +151,16 @@ class TestExtractTitleAndArea:
         title, area = scraper._extract_title_and_area(text, "", "")
 
         assert "定期メンテナンス" in title
+        assert area == ""
+
+    def test_bracket_inside_title_is_kept(self, scraper):
+        """タイトル途中の括弧（地域でもステータスでもない）はタイトルに残ること"""
+        text = "2025.12.09 サービス停波（STB）について"
+        status = scraper._extract_status(text)
+        title, area = scraper._extract_title_and_area(text, "2025.12.09", status)
+
+        assert status == ""
+        assert title == "サービス停波（STB）について"
         assert area == ""
 
 
