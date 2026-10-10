@@ -16,6 +16,18 @@ class TestMainFunction:
         mocker.patch("src.main.ToshimaScraper.fetch_outage_list", return_value=[])
         assert main() == 1
 
+    def test_returns_1_when_state_file_is_corrupt(self, mocker, tmp_path):
+        """状態ファイルが壊れている場合に1を返し、ファイルを書き換えないこと"""
+        state_path = tmp_path / "state.json"
+        state_path.write_text("{ broken json", encoding="utf-8")
+        mocker.patch("src.main.STATE_FILE_PATH", state_path)
+        fetch = mocker.patch("src.main.ToshimaScraper.fetch_outage_list")
+
+        assert main() == 1
+
+        fetch.assert_not_called()
+        assert state_path.read_text(encoding="utf-8") == "{ broken json"
+
     def test_returns_2_when_upstream_unavailable(self, mocker, tmp_path):
         """上流サイトに到達できない場合に2を返し、状態ファイルを作らないこと"""
         state_path = tmp_path / "state.json"

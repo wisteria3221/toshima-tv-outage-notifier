@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from .config import LOG_LEVEL, STATE_FILE_PATH
 from .notifier import XNotifier, can_send_notification, should_notify_change
 from .scraper import ToshimaScraper, UpstreamUnavailableError
-from .state_manager import StateManager
+from .state_manager import StateFileError, StateManager
 
 # 終了コード
 # GitHub Actions 側でこの値を見て扱いを変える（check-outage.yml を参照）。
@@ -80,7 +80,13 @@ def main() -> int:
     try:
         # 1. 状態ファイル読み込み
         logger.info("状態ファイルを読み込んでいます...")
-        state_manager = StateManager(STATE_FILE_PATH)
+        try:
+            state_manager = StateManager(STATE_FILE_PATH)
+        except StateFileError as e:
+            # 壊れた状態ファイルで続行すると全障害を再通知してしまう。
+            # 状態は一切変更せずに失敗させ、人が確認してから直す。
+            logger.error(f"{e}（状態ファイルを確認してください）")
+            return EXIT_FAILURE
 
         # 2. 障害情報をスクレイピング
         logger.info("障害情報を取得しています...")

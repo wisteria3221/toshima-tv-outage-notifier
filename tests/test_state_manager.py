@@ -3,7 +3,12 @@
 import pytest
 
 from src.scraper import OutageInfo
-from src.state_manager import ChangeResult, StateManager, StatusChange
+from src.state_manager import (
+    ChangeResult,
+    StateFileError,
+    StateManager,
+    StatusChange,
+)
 
 
 @pytest.fixture
@@ -44,6 +49,47 @@ class TestStateManager:
 
         assert "100" in manager2.state["outages"]
         assert manager2.state["outages"]["100"]["title"] == "テスト障害"
+
+
+class TestLoadState:
+    """状態ファイル読み込みのテスト"""
+
+    def test_missing_file_creates_initial_state(self, temp_state_file):
+        """ファイルが存在しない場合は初期状態で開始すること（初回実行）"""
+        manager = StateManager(temp_state_file)
+        assert manager.state["outages"] == {}
+
+    def test_invalid_json_raises(self, temp_state_file):
+        """JSON として不正なファイルは StateFileError を送出すること
+
+        初期状態で続行すると全障害を再通知し、履歴を上書きしてしまう。
+        """
+        temp_state_file.write_text("{ broken json", encoding="utf-8")
+        with pytest.raises(StateFileError):
+            StateManager(temp_state_file)
+
+    def test_merge_conflict_marker_raises(self, temp_state_file):
+        """マージ衝突マーカーが残ったファイルは StateFileError を送出すること"""
+        temp_state_file.write_text(
+            '<<<<<<< HEAD\n{"outages": {}}\n=======\n{"outages": {}}\n>>>>>>> main\n',
+            encoding="utf-8",
+        )
+        with pytest.raises(StateFileError):
+            StateManager(temp_state_file)
+
+    def test_wrong_shape_raises(self, temp_state_file):
+        """outages が辞書でないファイルは StateFileError を送出すること"""
+        temp_state_file.write_text('{"outages": []}', encoding="utf-8")
+        with pytest.raises(StateFileError):
+            StateManager(temp_state_file)
+
+    def test_file_is_not_overwritten_on_error(self, temp_state_file):
+        """読み込みに失敗してもファイルの内容が変更されないこと"""
+        broken = "{ broken json"
+        temp_state_file.write_text(broken, encoding="utf-8")
+        with pytest.raises(StateFileError):
+            StateManager(temp_state_file)
+        assert temp_state_file.read_text(encoding="utf-8") == broken
 
 
 class TestGetChanges:

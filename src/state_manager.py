@@ -14,6 +14,16 @@ from .scraper import OutageInfo
 logger = logging.getLogger(__name__)
 
 
+class StateFileError(Exception):
+    """既存の状態ファイルを読み込めなかったことを表す例外
+
+    状態ファイルは通知判断の唯一の根拠なので、壊れている場合に空の初期状態で
+    続行すると、掲載中の全障害を新規として再通知した上で履歴を上書きしてしまう。
+    そのため読み込み失敗は処理を止めて人に気づかせる（main では終了コード 1）。
+    ファイルが存在しない場合は正常な初回実行なので、この例外は使わない。
+    """
+
+
 @dataclass
 class StatusChange:
     """ステータス変更情報"""
@@ -63,6 +73,9 @@ class StateManager:
 
         Returns:
             状態辞書
+
+        Raises:
+            StateFileError: ファイルは存在するが読み込めない・JSON として不正な場合
         """
         if not self.state_file.exists():
             logger.info(f"状態ファイルが存在しません: {self.state_file}")
@@ -71,13 +84,22 @@ class StateManager:
         try:
             with open(self.state_file, encoding="utf-8") as f:
                 state = json.load(f)
-                logger.info(
-                    f"状態ファイルを読み込みました: {len(state.get('outages', {}))} 件の障害情報"
-                )
-                return state
         except (OSError, json.JSONDecodeError) as e:
-            logger.error(f"状態ファイルの読み込みに失敗: {e}")
-            return self._create_initial_state()
+            # 初期状態で続行すると全障害を再通知し履歴も上書きしてしまうため、止める
+            raise StateFileError(
+                f"状態ファイルを読み込めません: {self.state_file} - {e}"
+            ) from e
+
+        if not isinstance(state, dict) or not isinstance(state.get("outages"), dict):
+            raise StateFileError(
+                f"状態ファイルの形式が不正です（outages が辞書ではありません）: "
+                f"{self.state_file}"
+            )
+
+        logger.info(
+            f"状態ファイルを読み込みました: {len(state['outages'])} 件の障害情報"
+        )
+        return state
 
     def _create_initial_state(self) -> dict:
         """初期状態を作成
