@@ -10,7 +10,7 @@
 **場所**: `src/`
 **目的**: パイプラインの各段階を1モジュール1責務で配置する
 **例**:
-- `scraper.py` — HTML取得とパース。`OutageInfo` を生成。取得不能は `UpstreamUnavailableError` で表す
+- `scraper.py` — HTML取得とパース。`OutageInfo` を生成。一時的な取得不能は `UpstreamUnavailableError`、4xx 拒否は `UpstreamRejectedError` で表す
 - `state_manager.py` — 保存状態との差分検知・状態更新・通知履歴管理
 - `notifier.py` — メッセージ整形とX投稿、レート制限判定
 - `config.py` — URL・パス・上限値・環境変数・認証情報

@@ -53,6 +53,15 @@ class UpstreamUnavailableError(Exception):
     """
 
 
+class UpstreamRejectedError(Exception):
+    """障害情報ページが 4xx で拒否されたことを表す例外
+
+    404（URL 変更）や 403（User-Agent のブロック）はリトライしても結果が変わらず、
+    放置すると監視が止まったままになる。一時的な不通（UpstreamUnavailableError）
+    とは区別し、リトライせずに即座に失敗させて人に気づかせる（main では終了コード 1）。
+    """
+
+
 @dataclass
 class OutageInfo:
     """障害情報データクラス"""
@@ -86,6 +95,7 @@ class ToshimaScraper:
 
         Raises:
             UpstreamUnavailableError: 1 ページ目をリトライ後も取得できなかった場合
+            UpstreamRejectedError: 4xx で拒否された場合（1 ページ目・2 ページ目以降とも）
         """
         all_outages = []
 
@@ -120,15 +130,26 @@ class ToshimaScraper:
     def _fetch_with_retry(self, url: str) -> str | None:
         """リトライ付きでページを取得
 
+        接続エラー・タイムアウト・5xx は一時的な要因とみなして指数バックオフで
+        再試行する。4xx はリトライしても変わらないため即座に例外にする。
+
         Args:
             url: 取得するURL
 
         Returns:
-            HTMLコンテンツ、失敗時はNone
+            HTMLコンテンツ、リトライを使い切った場合はNone
+
+        Raises:
+            UpstreamRejectedError: 4xx 応答を受けた場合（リトライしない）
         """
         for attempt in range(MAX_RETRIES):
             try:
                 response = self.session.get(url, timeout=REQUEST_TIMEOUT)
+                if 400 <= response.status_code < 500:
+                    raise UpstreamRejectedError(
+                        f"障害情報ページが拒否されました: {url} - "
+                        f"HTTP {response.status_code}"
+                    )
                 response.raise_for_status()
                 response.encoding = response.apparent_encoding
                 return response.text

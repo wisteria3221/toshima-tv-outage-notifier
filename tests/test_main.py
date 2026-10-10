@@ -3,7 +3,11 @@
 import json
 
 from src.main import EXIT_UPSTREAM_UNAVAILABLE, main
-from src.scraper import OutageInfo, UpstreamUnavailableError
+from src.scraper import (
+    OutageInfo,
+    UpstreamRejectedError,
+    UpstreamUnavailableError,
+)
 from src.state_manager import ChangeResult
 
 
@@ -38,6 +42,17 @@ class TestMainFunction:
         )
         assert main() == EXIT_UPSTREAM_UNAVAILABLE
         assert EXIT_UPSTREAM_UNAVAILABLE == 2
+        assert not state_path.exists()
+
+    def test_returns_1_when_upstream_rejects(self, mocker, tmp_path):
+        """上流が 4xx で拒否した場合に 2 ではなく 1 を返すこと（恒久的な破損の疑い）"""
+        state_path = tmp_path / "state.json"
+        mocker.patch("src.main.STATE_FILE_PATH", state_path)
+        mocker.patch(
+            "src.main.ToshimaScraper.fetch_outage_list",
+            side_effect=UpstreamRejectedError("HTTP 404"),
+        )
+        assert main() == 1
         assert not state_path.exists()
 
     def test_returns_0_when_no_changes(self, mocker, tmp_path, sample_outage):

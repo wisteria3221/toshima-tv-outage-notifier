@@ -7,7 +7,12 @@ import requests
 import responses as responses_lib
 
 from src.config import BACKOFF_FACTOR, MAX_RETRIES, TOSHIMA_TROUBLE_URL
-from src.scraper import OutageInfo, ToshimaScraper, UpstreamUnavailableError
+from src.scraper import (
+    OutageInfo,
+    ToshimaScraper,
+    UpstreamRejectedError,
+    UpstreamUnavailableError,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -151,16 +156,31 @@ class TestFetchWithRetry:
         assert "test" in result
 
     @responses_lib.activate
-    def test_returns_none_on_http_error(self, scraper):
-        """HTTPエラー（404）の場合にNoneを返すこと（リトライ後）"""
+    def test_returns_none_on_server_error_after_retries(self, scraper):
+        """5xx がリトライ回数分続いた場合にNoneを返すこと"""
         for _ in range(MAX_RETRIES):
             responses_lib.add(
                 responses_lib.GET,
                 TOSHIMA_TROUBLE_URL,
-                status=404,
+                status=503,
             )
         result = scraper._fetch_with_retry(TOSHIMA_TROUBLE_URL)
         assert result is None
+        assert len(responses_lib.calls) == MAX_RETRIES
+
+    @responses_lib.activate
+    @pytest.mark.parametrize("status", [403, 404, 410])
+    def test_raises_immediately_on_client_error(self, scraper, no_sleep, status):
+        """4xx はリトライせずに UpstreamRejectedError を送出すること
+
+        URL 変更や UA ブロックはリトライしても変わらないため、40 秒のバックオフを
+        消費せず即座に失敗させる。
+        """
+        responses_lib.add(responses_lib.GET, TOSHIMA_TROUBLE_URL, status=status)
+        with pytest.raises(UpstreamRejectedError, match=str(status)):
+            scraper._fetch_with_retry(TOSHIMA_TROUBLE_URL)
+        assert len(responses_lib.calls) == 1
+        no_sleep.assert_not_called()
 
     @responses_lib.activate
     def test_returns_none_after_all_connection_failures(self, scraper, no_sleep):
@@ -224,6 +244,14 @@ class TestFetchOutageList:
                 status=500,
             )
         with pytest.raises(UpstreamUnavailableError):
+            scraper.fetch_outage_list()
+
+    @responses_lib.activate
+    def test_raises_rejected_when_first_page_is_404(self, scraper):
+        """1ページ目が 404 の場合は UpstreamUnavailableError ではなく
+        UpstreamRejectedError を送出すること"""
+        responses_lib.add(responses_lib.GET, TOSHIMA_TROUBLE_URL, status=404)
+        with pytest.raises(UpstreamRejectedError):
             scraper.fetch_outage_list()
 
     @responses_lib.activate

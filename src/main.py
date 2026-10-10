@@ -10,7 +10,11 @@ from dotenv import load_dotenv
 
 from .config import LOG_LEVEL, STATE_FILE_PATH
 from .notifier import XNotifier, can_send_notification, should_notify_change
-from .scraper import ToshimaScraper, UpstreamUnavailableError
+from .scraper import (
+    ToshimaScraper,
+    UpstreamRejectedError,
+    UpstreamUnavailableError,
+)
 from .state_manager import StateFileError, StateManager
 
 # 終了コード
@@ -99,6 +103,11 @@ def main() -> int:
             # 通知失敗（EXIT_FAILURE）とは区別し、ワークフロー側では警告扱いにする。
             logger.warning(f"障害情報ページに到達できませんでした: {e}")
             return EXIT_UPSTREAM_UNAVAILABLE
+        except UpstreamRejectedError as e:
+            # 404（URL 変更）や 403（UA ブロック）は放置すると監視が止まったままになるので、
+            # 一時的な不通とは区別して失敗させる。
+            logger.error(f"{e}（URL 変更や User-Agent のブロックを確認してください）")
+            return EXIT_FAILURE
 
         if not outages:
             # ページは取れたのに 1 件も解析できない = ページ構造の変更などの恒久的な問題
