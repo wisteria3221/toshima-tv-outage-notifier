@@ -5,19 +5,34 @@
     <title>障害情報一覧｜としまテレビ</title>
 </head>
 <body>
+<!-- 本番ページ（https://www.toshima.co.jp/trouble/）の一覧部分の構造を再現したもの。
+     日付とタイトルは <a> 内の別々の <p> に分かれており、スクレイパーは
+     get_text(strip=True) で連結したテキストから日付・ステータス・タイトル・地域を抽出する。 -->
 <div class="trouble-list">
     <ul>
         <li>
-            <a href="/trouble/detail/91">2025.12.09（終了）緊急メンテナンス（池袋本町1丁目付近）</a>
+            <a href="/trouble/detail/91" target="_self">
+                <p class="date">2025.12.09</p>
+                <p class="ttl">（終了）緊急メンテナンス（池袋本町1丁目付近）</p>
+            </a>
         </li>
         <li>
-            <a href="/trouble/detail/90">2025.12.05（復旧）インターネット接続障害（南池袋2丁目付近）</a>
+            <a href="/trouble/detail/90" target="_self">
+                <p class="date">2025.12.05</p>
+                <p class="ttl">（復旧）インターネット接続障害（南池袋2丁目付近）</p>
+            </a>
         </li>
         <li>
-            <a href="/trouble/detail/89">2025.12.01インターネットサービス不通（目白3丁目地区）</a>
+            <a href="/trouble/detail/89" target="_self">
+                <p class="date">2025.12.01</p>
+                <p class="ttl">インターネットサービス不通（目白3丁目地区）</p>
+            </a>
         </li>
         <li>
-            <a href="/trouble/detail/88">2025.11.28（完了）定期メンテナンス</a>
+            <a href="/trouble/detail/88" target="_self">
+                <p class="date">2025.11.28</p>
+                <p class="ttl">（完了）定期メンテナンス</p>
+            </a>
         </li>
     </ul>
 </div>

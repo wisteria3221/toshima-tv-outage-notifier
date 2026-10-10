@@ -9,6 +9,21 @@ import pytest
 from src.scraper import OutageInfo
 
 
+@pytest.fixture(autouse=True)
+def never_post_for_real(mocker):
+    """テストから X への実投稿が呼ばれないことを保証するガード
+
+    main() 系のテストは本物の XNotifier を生成し、投稿メソッドを個別にモックしている。
+    ローカルに本物の認証情報を持つ .env があると、モックを忘れたテストを追加した
+    時点で本番投稿が走るため、create_tweet を必ず失敗させておく。
+    投稿処理を試験するテストは、このフィクスチャより後に自分で patch し直す。
+    """
+    return mocker.patch(
+        "tweepy.Client.create_tweet",
+        side_effect=AssertionError("テストから X への実投稿が呼ばれました"),
+    )
+
+
 @pytest.fixture
 def temp_state_file(tmp_path):
     """一時的な状態ファイル"""
