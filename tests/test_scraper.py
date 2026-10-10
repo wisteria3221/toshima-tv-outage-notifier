@@ -323,6 +323,30 @@ class TestFetchOutageList:
             scraper.fetch_outage_list()
 
     @responses_lib.activate
+    def test_returns_first_page_when_second_page_is_404(
+        self, scraper, sample_list_html
+    ):
+        """2ページ目が 404 でも例外にせず、取得済みの結果を返すこと
+
+        最終ページの次は存在しないので 404 は正常系。1 ページ目の 4xx とは区別する。
+        """
+        responses_lib.add(
+            responses_lib.GET,
+            TOSHIMA_TROUBLE_URL,
+            body=sample_list_html,
+            status=200,
+            content_type="text/html; charset=utf-8",
+        )
+        responses_lib.add(
+            responses_lib.GET,
+            f"{TOSHIMA_TROUBLE_URL}page/2/",
+            status=404,
+        )
+        outages = scraper.fetch_outage_list(max_pages=2)
+        assert len(outages) == 4
+        assert len(responses_lib.calls) == 2
+
+    @responses_lib.activate
     def test_returns_first_page_when_second_page_fetch_fails(
         self, scraper, sample_list_html
     ):

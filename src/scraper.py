@@ -97,7 +97,7 @@ class ToshimaScraper:
 
         Raises:
             UpstreamUnavailableError: 1 ページ目をリトライ後も取得できなかった場合
-            UpstreamRejectedError: 4xx で拒否された場合（1 ページ目・2 ページ目以降とも）
+            UpstreamRejectedError: 1 ページ目が 4xx で拒否された場合
         """
         all_outages = []
 
@@ -108,16 +108,26 @@ class ToshimaScraper:
                 else f"{TOSHIMA_TROUBLE_URL}page/{page}/"
             )
 
-            html = self._fetch_with_retry(url)
-            if html is None:
-                if page == 1:
-                    # 1 ページ目すら取れない = 上流サイトに到達できない状態。
-                    # 空リスト（= パース結果が空）とは区別するため例外で通知する。
+            if page == 1:
+                # 1 ページ目すら取れない = 上流サイトに到達できない状態。
+                # 空リスト（= パース結果が空）とは区別するため例外で通知する。
+                # 4xx（UpstreamRejectedError）はそのまま呼び出し側へ伝える。
+                html = self._fetch_with_retry(url)
+                if html is None:
                     raise UpstreamUnavailableError(
                         f"障害情報ページを取得できません: {url}"
                     )
-                logger.warning(f"ページ {page} の取得に失敗しました")
-                break
+            else:
+                # 2 ページ目以降は「ページが存在しない」404 が正常系としてありうるので、
+                # 4xx も不通も取得済みの結果を返して打ち切る（実行全体は失敗にしない）。
+                try:
+                    html = self._fetch_with_retry(url)
+                except UpstreamRejectedError as e:
+                    logger.warning(f"ページ {page} が拒否されたため打ち切ります: {e}")
+                    break
+                if html is None:
+                    logger.warning(f"ページ {page} の取得に失敗しました")
+                    break
 
             outages = self._parse_list_page(html)
             if not outages:
