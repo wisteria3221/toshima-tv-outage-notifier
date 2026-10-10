@@ -156,6 +156,7 @@ GitHub Actions のみ（シークレット）:
 - `concurrency: group: check-outage` で重複起動を直列化（state.json の push 衝突防止）
 - Actionsタブから手動実行可能
 - `data/state.json` の変更を `[skip ci]` フラグ付きで自動コミット
+- push が拒否された場合（人が main に push した直後など。`concurrency` は Actions 同士しか直列化しない）は `git pull --rebase` して 1 回だけ再試行する。投稿済みの状態をコミットできないと次回二重投稿になるため
 - 本処理の前に Lint とテストを実行するため、どちらかが失敗すると障害チェック自体が走らない
 - リポジトリ設定でシークレットの設定が必要
 

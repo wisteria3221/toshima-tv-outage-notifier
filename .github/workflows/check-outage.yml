@@ -77,8 +77,15 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add data/state.json
-          git diff --staged --quiet || git commit -m "chore: Update outage state [skip ci]"
-          git push
+          if git diff --staged --quiet; then
+            echo "状態ファイルに変更はありません"
+            exit 0
+          fi
+          git commit -m "chore: Update outage state [skip ci]"
+          # concurrency は Actions 同士しか直列化しないため、人が main に push した直後の
+          # 実行では push が拒否される。そのまま失敗すると投稿済みの状態がコミットされず
+          # 次回実行で二重投稿になるので、リベースして 1 回だけ再試行する。
+          git push || (git pull --rebase origin main && git push)
 
       # 死活報告（dead-man's switch）。常に実行し、結果に応じて送り先を変える。
       #   成功(0)      → 通常 ping（Healthchecks の期限をリセット）
