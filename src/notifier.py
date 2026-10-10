@@ -1,6 +1,7 @@
 """X（Twitter）通知モジュール"""
 
 import logging
+import re
 
 import tweepy
 
@@ -19,11 +20,71 @@ _RATE_LIMIT_CRITICAL_RATIO = 0.96  # 96%: 新規障害のみ
 _RATE_LIMIT_REDUCED_RATIO = 0.90  # 90%: 新規障害のみ、ステータス変更スキップ
 _RESOLUTION_STATUSES = frozenset(["復旧", "終了", "完了"])
 
+# X の文字数カウント（weighted length）
+# https://developer.x.com/en/docs/counting-characters
+# - 以下の範囲のコードポイントは 1 文字、それ以外（日本語・絵文字など）は 2 文字として数える
+# - URL は長さにかかわらず t.co 短縮後の 23 文字として数える
+# Python の len() とは一致しないため、280 文字判定にはこちらを使う。
+_SINGLE_WEIGHT_RANGES = (
+    (0x0000, 0x10FF),
+    (0x2000, 0x200D),
+    (0x2010, 0x201F),
+    (0x2032, 0x2037),
+)
+_URL_WEIGHT = 23
+_RE_URL = re.compile(r"https?://\S+")
+_ELLIPSIS = "..."
+
+
+def _char_weight(char: str) -> int:
+    """1 文字の重み（X のカウント規則）を返す"""
+    code = ord(char)
+    for start, end in _SINGLE_WEIGHT_RANGES:
+        if start <= code <= end:
+            return 1
+    return 2
+
+
+def _plain_weighted_length(text: str) -> int:
+    """URL を含まないテキストの重み付き文字数"""
+    return sum(_char_weight(c) for c in text)
+
+
+def weighted_length(text: str) -> int:
+    """X の規則に従った重み付き文字数を返す
+
+    Args:
+        text: 対象テキスト（URL を含んでよい）
+
+    Returns:
+        X が投稿時に数える文字数
+    """
+    length = 0
+    pos = 0
+    for match in _RE_URL.finditer(text):
+        length += _plain_weighted_length(text[pos : match.start()]) + _URL_WEIGHT
+        pos = match.end()
+    length += _plain_weighted_length(text[pos:])
+    return length
+
+
+def _cut_to_weight(text: str, budget: int) -> str:
+    """重み付き文字数が budget 以下に収まるよう先頭から切り出す"""
+    result: list[str] = []
+    used = 0
+    for char in text:
+        weight = _char_weight(char)
+        if used + weight > budget:
+            break
+        result.append(char)
+        used += weight
+    return "".join(result)
+
 
 class XNotifier:
     """X（Twitter）通知クラス"""
 
-    MAX_TWEET_LENGTH = 280
+    MAX_TWEET_LENGTH = 280  # 重み付き文字数（weighted_length）での上限
 
     def __init__(self):
         """初期化"""
@@ -91,21 +152,19 @@ class XNotifier:
         Returns:
             フォーマットされたメッセージ
         """
-        lines = [
-            "【としまテレビ 障害情報】",
-            outage.title,
-        ]
-
+        fixed_lines = []
         if outage.date:
-            lines.append(f"日時: {outage.date}")
-
+            fixed_lines.append(f"日時: {outage.date}")
         if outage.area:
-            lines.append(f"地域: {outage.area}")
+            fixed_lines.append(f"地域: {outage.area}")
+        fixed_lines.append(f"詳細: {outage.url}")
 
-        lines.append(f"詳細: {outage.url}")
-
-        message = "\n".join(lines)
-        return self._truncate_message(message)
+        return self._compose_message(
+            header="【としまテレビ 障害情報】",
+            title=outage.title,
+            title_line_format="{title}",
+            fixed_lines=fixed_lines,
+        )
 
     def _format_status_change_message(self, change: StatusChange) -> str:
         """ステータス変更用メッセージをフォーマット
@@ -122,26 +181,71 @@ class XNotifier:
         # ステータスに応じてヘッダーを変更
         if new_status in _RESOLUTION_STATUSES:
             header = f"【としまテレビ {new_status}情報】"
-            status_text = f"{outage.title} が{new_status}しました"
+            title_line_format = f"{{title}} が{new_status}しました"
         else:
             header = "【としまテレビ 障害情報更新】"
-            status_text = f"{outage.title}（{new_status}）"
+            title_line_format = f"{{title}}（{new_status}）"
 
-        lines = [
-            header,
-            status_text,
-        ]
-
+        fixed_lines = []
         if outage.area:
-            lines.append(f"地域: {outage.area}")
+            fixed_lines.append(f"地域: {outage.area}")
+        fixed_lines.append(f"詳細: {outage.url}")
 
-        lines.append(f"詳細: {outage.url}")
+        return self._compose_message(
+            header=header,
+            title=outage.title,
+            title_line_format=title_line_format,
+            fixed_lines=fixed_lines,
+        )
 
-        message = "\n".join(lines)
-        return self._truncate_message(message)
+    def _compose_message(
+        self,
+        header: str,
+        title: str,
+        title_line_format: str,
+        fixed_lines: list[str],
+    ) -> str:
+        """ヘッダー・タイトル行・固定行からメッセージを組み立てる
+
+        280 文字（重み付き）を超える場合はタイトルだけを切り詰め、
+        ヘッダーや末尾の「詳細: URL」行は必ず残す。
+
+        Args:
+            header: 1 行目のヘッダー
+            title: 障害タイトル（切り詰め対象）
+            title_line_format: タイトル行の書式。``{title}`` を含む
+            fixed_lines: タイトル行の後ろに続く固定行（日時・地域・URL）
+
+        Returns:
+            280 文字以内に収まったメッセージ
+        """
+
+        def build(fitted_title: str) -> str:
+            lines = [header, title_line_format.format(title=fitted_title), *fixed_lines]
+            return "\n".join(lines)
+
+        message = build(title)
+        if weighted_length(message) <= self.MAX_TWEET_LENGTH:
+            return message
+
+        # タイトル以外の部分（タイトルを空にしたメッセージ）が占める文字数を差し引き、
+        # タイトルに使える残りを求める
+        available = self.MAX_TWEET_LENGTH - weighted_length(build(""))
+        title_budget = available - _plain_weighted_length(_ELLIPSIS)
+        fitted_title = _cut_to_weight(title, max(title_budget, 0)).rstrip() + _ELLIPSIS
+        logger.warning(
+            f"タイトルを切り詰めました: {weighted_length(title)} -> "
+            f"{weighted_length(fitted_title)} 文字（重み付き）"
+        )
+
+        # 固定行だけで上限を超える異常時の最終防衛線
+        return self._truncate_message(build(fitted_title))
 
     def _truncate_message(self, message: str) -> str:
-        """メッセージを最大文字数に切り詰め
+        """メッセージを最大文字数（重み付き）に切り詰め
+
+        通常は _compose_message がタイトルを切り詰めるため、ここに到達するのは
+        固定行だけで上限を超えるような異常時のみ。
 
         Args:
             message: 元のメッセージ
@@ -149,13 +253,14 @@ class XNotifier:
         Returns:
             切り詰められたメッセージ
         """
-        if len(message) <= self.MAX_TWEET_LENGTH:
+        if weighted_length(message) <= self.MAX_TWEET_LENGTH:
             return message
 
-        # URLを保持しつつ切り詰め
-        truncated = message[: self.MAX_TWEET_LENGTH - 3] + "..."
+        budget = self.MAX_TWEET_LENGTH - _plain_weighted_length(_ELLIPSIS)
+        truncated = _cut_to_weight(message, budget) + _ELLIPSIS
         logger.warning(
-            f"メッセージを切り詰めました: {len(message)} -> {len(truncated)}文字"
+            f"メッセージを切り詰めました: {weighted_length(message)} -> "
+            f"{weighted_length(truncated)} 文字（重み付き）"
         )
         return truncated
 

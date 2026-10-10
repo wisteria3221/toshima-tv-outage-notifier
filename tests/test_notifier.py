@@ -2,7 +2,12 @@
 
 import pytest
 
-from src.notifier import XNotifier, can_send_notification, should_notify_change
+from src.notifier import (
+    XNotifier,
+    can_send_notification,
+    should_notify_change,
+    weighted_length,
+)
 from src.scraper import OutageInfo
 from src.state_manager import StateManager, StatusChange
 
@@ -134,38 +139,115 @@ class TestFormatStatusChangeMessage:
         assert "進行中" in message
 
 
+class TestWeightedLength:
+    """X の文字数カウント（weighted length）のテスト"""
+
+    def test_ascii_counts_one_each(self):
+        """ASCII 文字は 1 文字として数えること"""
+        assert weighted_length("abc 123\n") == 8
+
+    def test_japanese_counts_two_each(self):
+        """日本語（CJK・全角記号）は 2 文字として数えること"""
+        assert weighted_length("あいう") == 6
+        assert weighted_length("【障害】") == 8
+
+    def test_url_counts_as_23(self):
+        """URL は長さにかかわらず 23 文字として数えること"""
+        url = "https://www.toshima.co.jp/trouble/detail/91"
+        assert len(url) > 23
+        assert weighted_length(url) == 23
+        assert weighted_length(f"詳細: {url}") == 2 * 2 + 2 + 23
+
+    def test_empty_string_is_zero(self):
+        """空文字は 0 であること"""
+        assert weighted_length("") == 0
+
+
 class TestTruncateMessage:
-    """メッセージ切り詰めのテスト"""
+    """メッセージ切り詰め（最終防衛線）のテスト"""
 
     def test_short_message_unchanged(self):
-        """280文字以下のメッセージは変更されないこと"""
+        """上限以下のメッセージは変更されないこと"""
         notifier = XNotifier.__new__(XNotifier)
         notifier.client = None
         short_msg = "あ" * 100
         assert notifier._truncate_message(short_msg) == short_msg
 
-    def test_long_message_truncated(self):
-        """280文字超のメッセージが280文字に切り詰められること"""
+    def test_long_japanese_message_truncated_by_weight(self):
+        """日本語 150 文字（len では 280 未満）でも重み付きで上限に収まること"""
         notifier = XNotifier.__new__(XNotifier)
         notifier.client = None
-        long_msg = "あ" * 300
+        long_msg = "あ" * 150
         result = notifier._truncate_message(long_msg)
-        assert len(result) == 280
-
-    def test_truncated_message_ends_with_ellipsis(self):
-        """切り詰められたメッセージが「...」で終わること"""
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
-        long_msg = "あ" * 300
-        result = notifier._truncate_message(long_msg)
+        assert weighted_length(result) <= XNotifier.MAX_TWEET_LENGTH
         assert result.endswith("...")
 
-    def test_exactly_280_chars_unchanged(self):
-        """ちょうど280文字のメッセージは変更されないこと"""
+    def test_exactly_at_limit_unchanged(self):
+        """重み付きでちょうど上限のメッセージは変更されないこと"""
         notifier = XNotifier.__new__(XNotifier)
         notifier.client = None
-        exact_msg = "あ" * 280
+        exact_msg = "あ" * 140  # 140 × 2 = 280
+        assert weighted_length(exact_msg) == XNotifier.MAX_TWEET_LENGTH
         assert notifier._truncate_message(exact_msg) == exact_msg
+
+
+class TestComposeMessageTruncation:
+    """長いタイトルでも URL が残る切り詰めのテスト"""
+
+    def _notifier(self):
+        notifier = XNotifier.__new__(XNotifier)
+        notifier.client = None
+        return notifier
+
+    def _long_outage(self, title_len: int = 200) -> OutageInfo:
+        return OutageInfo(
+            id="1",
+            date="2025.12.09",
+            status="",
+            title="長" * title_len,
+            area="池袋本町1丁目付近",
+            url="https://www.toshima.co.jp/trouble/detail/1",
+        )
+
+    def test_new_outage_long_title_keeps_url_and_header(self):
+        """新規障害メッセージが長いタイトルでも URL とヘッダーを残すこと"""
+        outage = self._long_outage()
+        message = self._notifier()._format_new_outage_message(outage)
+        lines = message.split("\n")
+        assert weighted_length(message) <= XNotifier.MAX_TWEET_LENGTH
+        assert lines[0] == "【としまテレビ 障害情報】"
+        assert lines[-1] == f"詳細: {outage.url}"
+        assert "日時: 2025.12.09" in lines
+        assert "地域: 池袋本町1丁目付近" in lines
+        assert lines[1].endswith("...")
+        assert lines[1].startswith("長")
+
+    def test_status_change_long_title_keeps_suffix_and_url(self):
+        """ステータス変更メッセージが長いタイトルでも「が復旧しました」と URL を残すこと"""
+        outage = self._long_outage()
+        change = StatusChange(outage=outage, old_status="", new_status="復旧")
+        message = self._notifier()._format_status_change_message(change)
+        lines = message.split("\n")
+        assert weighted_length(message) <= XNotifier.MAX_TWEET_LENGTH
+        assert lines[0] == "【としまテレビ 復旧情報】"
+        assert lines[1].endswith("... が復旧しました")
+        assert lines[-1] == f"詳細: {outage.url}"
+
+    def test_title_within_limit_is_not_truncated(self):
+        """上限に収まるタイトルは切り詰められないこと"""
+        outage = self._long_outage(title_len=50)
+        message = self._notifier()._format_new_outage_message(outage)
+        assert "..." not in message
+        assert outage.title in message
+
+    def test_title_is_truncated_at_weighted_limit(self):
+        """len() では収まるが重み付きで超えるタイトルが切り詰められること"""
+        # タイトル 130 文字 × 2 = 260 と固定行で 280 を超えるが len() では 280 未満
+        outage = self._long_outage(title_len=130)
+        message = self._notifier()._format_new_outage_message(outage)
+        assert len(message) < 280
+        assert weighted_length(message) <= XNotifier.MAX_TWEET_LENGTH
+        assert "..." in message
 
 
 class TestCanSendNotification:
