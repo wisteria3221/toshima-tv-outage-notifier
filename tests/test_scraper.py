@@ -95,6 +95,69 @@ class TestToshimaScraper:
         assert outages[1].url == "https://www.toshima.co.jp/trouble/detail/90"
 
 
+class TestParseListPageDeduplication:
+    """同じ障害へのリンクが複数ある場合のテスト"""
+
+    def test_duplicate_links_to_same_outage_yield_one_entry(self, scraper):
+        """1 エントリに同じ詳細 URL へのリンクが複数あっても 1 件にまとめること
+
+        サムネイル画像リンクや「詳しくはこちら」リンクが追加されると同じ障害が
+        2 件になり、新規障害として 2 回投稿されてしまう。
+        """
+        html = """
+        <ul><li>
+          <a href="/trouble/detail/91"><img alt="thumb"></a>
+          <a href="/trouble/detail/91">2025.12.09（終了）緊急メンテナンス（池袋本町1丁目付近）</a>
+          <a href="/trouble/detail/91/">詳しくはこちら</a>
+        </li></ul>
+        """
+        outages = scraper._parse_list_page(html)
+
+        assert [o.id for o in outages] == ["91"]
+        # 最初にテキストを持つリンク（本文側）の内容が採用されること
+        assert outages[0].status == "終了"
+        assert outages[0].title == "緊急メンテナンス"
+
+    def test_distinct_outages_are_all_kept(self, scraper, sample_list_html):
+        """異なる障害は重複排除の影響を受けないこと"""
+        outages = scraper._parse_list_page(sample_list_html)
+        assert len({o.id for o in outages}) == len(outages) == 4
+
+
+class TestUrlConstruction:
+    """詳細 URL 構築のテスト"""
+
+    @pytest.mark.parametrize(
+        ("href", "expected"),
+        [
+            ("/trouble/detail/91", "https://www.toshima.co.jp/trouble/detail/91"),
+            (
+                "//www.toshima.co.jp/trouble/detail/91",
+                "https://www.toshima.co.jp/trouble/detail/91",
+            ),
+            (
+                "https://www.toshima.co.jp/trouble/detail/91/",
+                "https://www.toshima.co.jp/trouble/detail/91/",
+            ),
+        ],
+    )
+    def test_href_variants_resolve_to_absolute_url(self, scraper, href, expected):
+        """絶対パス・プロトコル相対・絶対 URL のいずれも正しい絶対 URL になること"""
+        html = f'<a href="{href}">2025.12.09（終了）緊急メンテナンス</a>'
+        outages = scraper._parse_list_page(html)
+        assert outages[0].url == expected
+
+
+class TestSessionLifecycle:
+    """HTTP セッションの後始末のテスト"""
+
+    def test_context_manager_closes_session(self, mocker):
+        """with ブロックを抜けるとセッションが閉じられること"""
+        with ToshimaScraper() as scraper:
+            close = mocker.patch.object(scraper.session, "close")
+        close.assert_called_once()
+
+
 class TestExtractStatus:
     """ステータス抽出のテスト"""
 
@@ -206,6 +269,35 @@ class TestFetchWithRetry:
             scraper._fetch_with_retry(TOSHIMA_TROUBLE_URL)
         assert len(responses_lib.calls) == 1
         no_sleep.assert_not_called()
+
+    @responses_lib.activate
+    @pytest.mark.parametrize("status", [408, 429])
+    def test_transient_client_errors_are_retried(self, scraper, no_sleep, status):
+        """408 / 429 は恒久的な拒否ではなく、5xx と同様にリトライすること
+
+        一時的なレート制限やタイムアウトで終了コード 1（要対応の失敗）にすると、
+        自然に解消する事象が /fail アラートになってしまう。
+        """
+        responses_lib.add(responses_lib.GET, TOSHIMA_TROUBLE_URL, status=status)
+        responses_lib.add(
+            responses_lib.GET,
+            TOSHIMA_TROUBLE_URL,
+            body="<html><body>recovered</body></html>",
+            status=200,
+        )
+        result = scraper._fetch_with_retry(TOSHIMA_TROUBLE_URL)
+        assert result is not None
+        assert "recovered" in result
+        assert len(responses_lib.calls) == 2
+        no_sleep.assert_called_once()
+
+    @responses_lib.activate
+    def test_persistent_429_returns_none_not_rejected(self, scraper):
+        """429 がリトライ回数分続いた場合は None（上流不通扱い）になること"""
+        for _ in range(MAX_RETRIES):
+            responses_lib.add(responses_lib.GET, TOSHIMA_TROUBLE_URL, status=429)
+        assert scraper._fetch_with_retry(TOSHIMA_TROUBLE_URL) is None
+        assert len(responses_lib.calls) == MAX_RETRIES
 
     @responses_lib.activate
     def test_returns_none_after_all_connection_failures(self, scraper, no_sleep):

@@ -5,6 +5,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
@@ -14,7 +15,6 @@ from .config import (
     BACKOFF_FACTOR,
     MAX_RETRIES,
     REQUEST_TIMEOUT,
-    TOSHIMA_BASE_URL,
     TOSHIMA_TROUBLE_URL,
 )
 
@@ -45,6 +45,11 @@ _RE_AREA_KEYWORD = re.compile(_AREA_KEYWORDS)
 # 地域抽出（括弧内で地域キーワードを含むもの）
 _RE_AREA_IN_BRACKETS = re.compile(rf"[（(]([^）)]*(?:{_AREA_KEYWORDS})[^）)]*)[）)]")
 
+# 4xx のうち一時的な要因とみなしてリトライする応答コード。
+# 408 Request Timeout / 429 Too Many Requests はリトライで解消しうるため、
+# 404 や 403 のような恒久的な拒否（UpstreamRejectedError）とは区別する。
+_TRANSIENT_CLIENT_ERRORS = frozenset({408, 429})
+
 
 class UpstreamUnavailableError(Exception):
     """障害情報ページ自体を取得できなかったことを表す例外
@@ -74,6 +79,7 @@ class OutageInfo:
     title: str  # 障害タイトル
     area: str  # 影響地域
     url: str  # 詳細ページURL
+    # 保存時刻は state_manager 側で付与する。ここでは生成時刻を参考値として持つだけ
     last_updated: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
@@ -85,6 +91,16 @@ class ToshimaScraper:
         self.session.headers.update(
             {"User-Agent": "ToshimaTVOutageNotifier/1.0 (GitHub Actions Bot)"}
         )
+
+    def close(self) -> None:
+        """HTTP セッションを閉じる"""
+        self.session.close()
+
+    def __enter__(self) -> ToshimaScraper:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
 
     def fetch_outage_list(self, max_pages: int = 1) -> list[OutageInfo]:
         """障害情報一覧を取得
@@ -142,8 +158,8 @@ class ToshimaScraper:
     def _fetch_with_retry(self, url: str) -> str | None:
         """リトライ付きでページを取得
 
-        接続エラー・タイムアウト・5xx は一時的な要因とみなして指数バックオフで
-        再試行する。4xx はリトライしても変わらないため即座に例外にする。
+        接続エラー・タイムアウト・5xx・408/429 は一時的な要因とみなして指数バックオフで
+        再試行する。それ以外の 4xx はリトライしても変わらないため即座に例外にする。
 
         Args:
             url: 取得するURL
@@ -152,16 +168,20 @@ class ToshimaScraper:
             HTMLコンテンツ、リトライを使い切った場合はNone
 
         Raises:
-            UpstreamRejectedError: 4xx 応答を受けた場合（リトライしない）
+            UpstreamRejectedError: 408/429 以外の 4xx 応答を受けた場合（リトライしない）
         """
         for attempt in range(MAX_RETRIES):
             try:
                 response = self.session.get(url, timeout=REQUEST_TIMEOUT)
-                if 400 <= response.status_code < 500:
+                if (
+                    400 <= response.status_code < 500
+                    and response.status_code not in _TRANSIENT_CLIENT_ERRORS
+                ):
                     raise UpstreamRejectedError(
                         f"障害情報ページが拒否されました: {url} - "
                         f"HTTP {response.status_code}"
                     )
+                # 5xx と 408/429 はここで HTTPError になりリトライ経路に入る
                 response.raise_for_status()
                 self._apply_fallback_encoding(response)
                 return response.text
@@ -206,6 +226,11 @@ class ToshimaScraper:
         """
         soup = BeautifulSoup(html, "html.parser")
         outages = []
+        # 同じ障害 ID を重複して返さないための既出 ID 集合。
+        # 1 エントリに同じ詳細 URL へのリンクが複数ある（サムネイル画像リンク、
+        # 「詳しくはこちら」など）と同じ障害が 2 件になり、二重投稿につながる。
+        # 最初に出現したリンク（本文テキスト側）を採用する。
+        seen_ids: set[str] = set()
 
         # 障害詳細へのリンクを含む要素を探す
         # パターン: /trouble/detail/{ID} または /trouble/detail/{ID}/
@@ -214,11 +239,16 @@ class ToshimaScraper:
         for link in links:
             try:
                 outage = self._parse_outage_entry(link)
-                if outage:
-                    outages.append(outage)
             except (AttributeError, ValueError) as e:
                 logger.warning(f"障害エントリーのパースに失敗: {e}")
                 continue
+            if outage is None:
+                continue
+            if outage.id in seen_ids:
+                logger.debug(f"重複する障害リンクをスキップ: ID={outage.id}")
+                continue
+            seen_ids.add(outage.id)
+            outages.append(outage)
 
         return outages
 
@@ -253,8 +283,8 @@ class ToshimaScraper:
         # タイトルと地域を抽出
         title, area = self._extract_title_and_area(text, date, status)
 
-        # 完全なURLを構築
-        full_url = f"{TOSHIMA_BASE_URL}{href}" if href.startswith("/") else href
+        # 完全なURLを構築（相対パス・絶対パス・絶対 URL のいずれにも対応）
+        full_url = urljoin(TOSHIMA_TROUBLE_URL, href)
 
         return OutageInfo(
             id=outage_id,
