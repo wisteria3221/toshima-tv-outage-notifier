@@ -103,7 +103,9 @@ DRY_RUN=true uv run python -m src.main
 
 ### GitHub Actions での自動実行
 
-リポジトリを GitHub にプッシュすると、30分ごとに自動実行されます。
+GitHub Actions の `schedule`（毎時 22 分・52 分）と、外部 cron（cron-job.org）からの `workflow_dispatch` 起動（毎時 7 分・37 分）の 2 系統で実行されます。
+`schedule` は GitHub 側の都合で遅延・間引きされることがあるため、外部 cron を主系、`schedule` をフォールバックとしています。
+両者が重なっても `concurrency` 設定により直列に実行され、状態ファイルのコミットが衝突することはありません。
 
 手動実行する場合は、Actions タブから「Check Toshima TV Outage」ワークフローを選択し、「Run workflow」をクリック。
 

@@ -2,12 +2,20 @@ name: Check Toshima TV Outage
 
 on:
   schedule:
-    # 毎時0分と30分に実行（UTC）
-    - cron: '0,30 * * * *'
-  workflow_dispatch:  # 手動実行用
+    # GitHub の schedule はベストエフォートで、実績では 1 日 4〜7 回しか起動しない期間があった。
+    # 主系は外部 cron（cron-job.org）から 7,37 分に workflow_dispatch を呼ぶ構成とし、
+    # ここは分をずらしたフォールバック。混雑しやすい 0 分も避ける。
+    - cron: '22,52 * * * *'
+  workflow_dispatch:  # 手動実行および外部 cron からの起動用
 
 permissions:
   contents: write  # 状態ファイルのコミット用
+
+# schedule と外部起動が重なっても data/state.json の push が衝突しないよう直列化する。
+# 実行中のランは止めず、後続を待たせる（cancel-in-progress: false）。
+concurrency:
+  group: check-outage
+  cancel-in-progress: false
 
 jobs:
   check-outage:

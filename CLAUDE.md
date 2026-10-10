@@ -139,7 +139,8 @@ X API用（ローカルでは `.env` に、GitHub Actionsではシークレッ�
 ## GitHub Actions
 
 **ワークフロー**: [.github/workflows/check-outage.yml](.github/workflows/check-outage.yml)
-- 30分ごとに実行（UTC時刻の毎時 `:00` と `:30`）
+- 外部 cron（cron-job.org）から毎時 `:07` `:37` に `workflow_dispatch` で起動するのが主系。`schedule`（毎時 `:22` `:52`）は GitHub 側で間引かれるためフォールバック
+- `concurrency: group: check-outage` で重複起動を直列化（state.json の push 衝突防止）
 - Actionsタブから手動実行可能
 - `data/state.json` の変更を `[skip ci]` フラグ付きで自動コミット
 - リポジトリ設定でシークレットの設定が必要
