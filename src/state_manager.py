@@ -3,6 +3,7 @@
 import copy
 import json
 import logging
+import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -132,14 +133,21 @@ class StateManager:
         # ディレクトリが存在しない場合は作成
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
 
+        # 一時ファイルに書き切ってから差し替える（アトミック書き込み）。
+        # 直接書くと途中で失敗したときに壊れたファイルが残り、終了コード 1 の
+        # ワークフローがそれをコミットしてしまう。次回は StateFileError で停止し
+        # 人手での修復が必要になるため、元のファイルは最後まで無傷に保つ。
+        tmp_file = self.state_file.with_name(self.state_file.name + ".tmp")
         try:
-            with open(self.state_file, "w", encoding="utf-8") as f:
+            with open(tmp_file, "w", encoding="utf-8") as f:
                 json.dump(self.state, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_file, self.state_file)
             logger.info(f"状態ファイルを保存しました: {self.state_file}")
             self._dirty = False
             return True
         except OSError as e:
             logger.error(f"状態ファイルの保存に失敗: {e}")
+            tmp_file.unlink(missing_ok=True)
             raise
 
     def get_changes(self, current_outages: list[OutageInfo]) -> ChangeResult:

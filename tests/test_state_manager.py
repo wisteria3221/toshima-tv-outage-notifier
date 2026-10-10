@@ -92,6 +92,54 @@ class TestLoadState:
         assert temp_state_file.read_text(encoding="utf-8") == broken
 
 
+class TestSaveState:
+    """状態ファイル保存（アトミック書き込み）のテスト"""
+
+    def test_no_temp_file_left_after_save(self, temp_state_file, sample_outage):
+        """保存後に一時ファイルが残らないこと"""
+        manager = StateManager(temp_state_file)
+        manager.update_outages([sample_outage])
+        manager.save_state()
+
+        assert temp_state_file.exists()
+        assert list(temp_state_file.parent.iterdir()) == [temp_state_file]
+
+    def test_failed_write_keeps_original_file_intact(
+        self, temp_state_file, sample_outage, mocker
+    ):
+        """書き込み途中で失敗しても元のファイルが壊れず、一時ファイルも残らないこと
+
+        途中まで書かれたファイルが残ると終了コード 1 でもコミットされ、
+        次回実行が StateFileError で止まってしまう。
+        """
+        manager = StateManager(temp_state_file)
+        manager.update_outages([sample_outage])
+        manager.save_state()
+        original = temp_state_file.read_text(encoding="utf-8")
+
+        other = OutageInfo(
+            id="200",
+            date="2025.12.21",
+            status="",
+            title="別の障害",
+            area="",
+            url="https://www.toshima.co.jp/trouble/detail/200",
+        )
+        manager.update_outages([sample_outage, other])
+
+        def broken_dump(obj, fp, **kwargs):
+            fp.write("{ partial")
+            raise OSError("disk full")
+
+        mocker.patch("src.state_manager.json.dump", side_effect=broken_dump)
+        with pytest.raises(OSError):
+            manager.save_state()
+
+        assert temp_state_file.read_text(encoding="utf-8") == original
+        assert list(temp_state_file.parent.iterdir()) == [temp_state_file]
+        assert manager.is_dirty()
+
+
 class TestGetChanges:
     """差分検出のテスト"""
 
