@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## プロジェクト概要
 
-としまテレビの障害情報ページ (https://www.toshima.co.jp/trouble/) をスクレイピングし、障害の発生やステータス変更時にX（Twitter）へ通知するPythonベースの監視システム。GitHub Actionsで30分ごとに自動実行される。
+としまテレビの障害情報ページ (https://www.toshima.co.jp/trouble/) をスクレイピングし、障害の発生やステータス変更時にX（Twitter）へ通知するPythonベースの監視システム。GitHub Actions 上で動作し、外部 cron（cron-job.org）から約30分ごとに起動される。
 
 ## 開発コマンド
 
@@ -53,6 +53,17 @@ uv run pytest -v
 uv run pytest -s
 ```
 
+### 依存関係の変更
+CI は `uv sync --frozen` で実行するため、依存を追加・更新したら必ず `uv.lock` を更新してコミットする（更新し忘れると CI が失敗する）。
+```bash
+# パッケージを追加（pyproject.toml と uv.lock を同時に更新）
+uv add <package>
+uv add --optional dev <package>   # dev 依存の場合
+
+# pyproject.toml を直接編集した場合はロックファイルのみ更新
+uv lock
+```
+
 ### Linting & Formatting
 ```bash
 # Ruff でコードをチェック
@@ -90,36 +101,35 @@ npx cc-sdd@latest --claude-skills --lang ja
 
 ### 主要コンポーネント
 
-**`OutageInfo` データクラス** ([src/scraper.py:47-57](src/scraper.py#L47-L57))
+**`OutageInfo` データクラス** ([src/scraper.py](src/scraper.py))
 - 1件の障害を表すコアデータ構造
 - フィールド: `id`, `date`, `status`, `title`, `area`, `url`, `last_updated`
-- `status` の値: `"終了"`, `"復旧"`, `"完了"`, `"仮復旧"`, `"調査中"`, または `""` (空文字 = 進行中)
+- `status` の値: 日付直後の括弧内テキストがそのまま入る（`""` = 括弧なし = 進行中）。典型値は `"終了"`, `"復旧"`, `"完了"`, `"仮復旧"`, `"調査中"` だが固定の列挙ではなく、メンテナンス告知では `"2026年3月12日"` のような予定日が入った実例もある。固定値を前提にした分岐を書かないこと
 
 **状態ファイルフォーマット** ([data/state.json](data/state.json))
 - 既知の全障害を通知履歴とともに追跡
 - 各障害には `notified_statuses` 配列があり、重複通知を防ぐ
 - 月間通知カウンターを含み、レート制限に使用
-- 月が変わると自動的にカウンターをリセット
+- 月が変わると自動的にカウンターをリセット（月判定は UTC。ワークフローの `TZ=Asia/Tokyo` は影響しない）
 
-**通知レート制限** ([src/notifier.py:190-235](src/notifier.py#L190-L235))
+**通知レート制限** ([src/notifier.py](src/notifier.py) の `can_send_notification()` / `should_notify_change()`)
 - X API Freeプランは月500ツイートまで
 - システムは安全マージンとして月450ツイートに制限（`MONTHLY_TWEET_LIMIT`、Free枠500の90%）
 - しきい値は定数化（`_RATE_LIMIT_CRITICAL_RATIO=0.96`, `_RATE_LIMIT_REDUCED_RATIO=0.90`）
-- 96%使用時: 新規障害のみ通知
-- 90%使用時: 新規障害のみ通知（ステータス変更は通知しない）
-- 送信可否は `can_send_notification()`、変更種別ごとの絞り込みは `should_notify_change()` 関数を参照
+- 90%以上使用時: 新規障害のみ通知（ステータス変更は通知しない）。96% のしきい値も現状は同じ挙動で、将来の段階的制限用に分けてある
+- 送信可否は `can_send_notification()`、変更種別ごとの絞り込みは `should_notify_change()` を参照
 
 ### 変更検出ロジック
 
-**新規障害の検出** ([src/state_manager.py:135-138](src/state_manager.py#L135-L138))
+**新規障害の検出** ([src/state_manager.py](src/state_manager.py) の `get_changes()`)
 - 障害IDが保存済み状態に存在しない → 新規障害
 
-**ステータス変更の検出** ([src/state_manager.py:141-161](src/state_manager.py#L141-L161))
+**ステータス変更の検出** ([src/state_manager.py](src/state_manager.py) の `get_changes()`)
 - 現在のステータスと保存済みステータスを比較
 - 新しいステータスが `notified_statuses` 配列に含まれていない場合のみ通知
 - ステータスが変更されていない場合の重複通知を防ぐ
 
-**状態更新フロー** ([src/state_manager.py:165-216](src/state_manager.py#L165-L216))
+**状態更新フロー** ([src/state_manager.py](src/state_manager.py) の `update_outages()` / `mark_notified()`)
 - `notified_statuses` を保持しながら既存障害を更新
 - 新規障害は空の `notified_statuses` 配列を持つ
 - `mark_notified()` は通知成功後にステータスを配列に追加
@@ -136,6 +146,9 @@ X API用（ローカルでは `.env` に、GitHub Actionsではシークレッ�
 - `DRY_RUN=true` - Xへの投稿をスキップ（テスト用）
 - `LOG_LEVEL=INFO` - ログレベル設定（DEBUG, INFO, WARNING, ERROR）
 
+GitHub Actions のみ（シークレット）:
+- `HEALTHCHECKS_URL` - Healthchecks.io の Ping URL（任意。未設定なら死活報告ステップをスキップ）
+
 ## GitHub Actions
 
 **ワークフロー**: [.github/workflows/check-outage.yml](.github/workflows/check-outage.yml)
@@ -143,11 +156,22 @@ X API用（ローカルでは `.env` に、GitHub Actionsではシークレッ�
 - `concurrency: group: check-outage` で重複起動を直列化（state.json の push 衝突防止）
 - Actionsタブから手動実行可能
 - `data/state.json` の変更を `[skip ci]` フラグ付きで自動コミット
+- 本処理の前に Lint とテストを実行するため、どちらかが失敗すると障害チェック自体が走らない
 - リポジトリ設定でシークレットの設定が必要
+
+**Lint ワークフロー**: [.github/workflows/lint.yml](.github/workflows/lint.yml)
+- push / PR 時に `ruff check` と `ruff format --check` を実行する
+- フォーマット差分だけでも失敗するので、コミット前に `uv run ruff format .` を通しておくこと
 
 ## 実装上の重要なポイント
 
+**コーディング規約・環境**
+- Python 3.14 以上。バージョンの正本は `.python-version`（CI と Dev Container が参照）
+- docstring・コメント・ログメッセージは日本語で書く。ドメインデータは `@dataclass`、テストは対象ごとの `Test...` クラスでグルーピングする。詳細は [.kiro/steering/tech.md](.kiro/steering/tech.md) を参照
+- スクレイパーのテストは [tests/fixtures/trouble_list.html](tests/fixtures/trouble_list.html) の保存 HTML に依存する。サイト構造の変更に追従する際はフィクスチャも更新する
+
 **スクレイピング戦略**
+- 取得対象は障害情報一覧の 1 ページ目のみ（`fetch_outage_list(max_pages=1)`）
 - 日本語テキストから日付、ステータス、タイトル、地域を抽出するために正規表現を使用
 - ステータス抽出: 日付の後の括弧内テキストを探す。地理的用語は除外
 - 地域抽出: 括弧内の地理的用語（丁目、付近、地区など）を識別
@@ -180,11 +204,11 @@ X API用（ローカルでは `.env` に、GitHub Actionsではシークレッ�
 - GitHub の `schedule` はベストエフォートで、実績では 1 日 48 回想定に対し 4〜7 回しか起動しない期間があった。起動しなかった実行は履歴に残らず気づけない
 - ワークフロー末尾で Healthchecks.io に ping する（シークレット `HEALTHCHECKS_URL`、未設定ならスキップ）。成功時のみ通常 ping、終了コード 2 は `/log`、それ以外は `/fail`
 
-**メッセージフォーマット** ([src/notifier.py:85-141](src/notifier.py#L85-L141))
+**メッセージフォーマット** ([src/notifier.py](src/notifier.py) の `_format_new_outage_message()` / `_format_status_change_message()`)
 - 新規障害: "【としまテレビ 障害情報】"
 - 復旧/終了/完了へのステータス変更: "【としまテレビ {status}情報】"
 - その他のステータス変更: "【としまテレビ 障害情報更新】"
-- 必要に応じて280文字に切り詰め
+- `len()` で 280 文字を超えたら末尾を `...` に置き換えて切り詰め（X の文字数カウントとは一致しない点に注意）
 
 **月のロールオーバー**
 - 月が変わると通知カウンターが自動的にリセット
