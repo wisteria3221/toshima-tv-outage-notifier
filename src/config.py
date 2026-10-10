@@ -3,6 +3,13 @@
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# 環境変数を評価する前に .env を反映する（ローカル実行用。CI ではシークレットが環境変数に入る）
+# main.py で呼ぶと、このモジュールの import 時に DRY_RUN や LOG_LEVEL が先に評価されてしまい
+# .env の値が無視される（DRY_RUN=true のつもりで本番投稿される）ため、ここで読む。
+load_dotenv()
+
 # プロジェクトルート
 PROJECT_ROOT = Path(__file__).parent.parent
 

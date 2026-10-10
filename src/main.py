@@ -6,8 +6,6 @@ from collections.abc import Callable
 from functools import partial
 from typing import Literal
 
-from dotenv import load_dotenv
-
 from .config import LOG_LEVEL, STATE_FILE_PATH
 from .notifier import XNotifier, can_send_notification, should_notify_change
 from .scraper import (
@@ -24,9 +22,6 @@ EXIT_FAILURE = (
     1  # 通知失敗・予期しない例外など、気づくべき失敗（状態は保存済みの場合がある）
 )
 EXIT_UPSTREAM_UNAVAILABLE = 2  # 上流サイトに到達できない（一時的、次回実行で再試行）
-
-# 環境変数の読み込み（.envファイルがあれば）
-load_dotenv()
 
 # ロギング設定
 logging.basicConfig(

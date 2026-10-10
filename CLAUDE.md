@@ -136,7 +136,7 @@ npx cc-sdd@latest --claude-skills --lang ja
 
 ## 環境変数
 
-X API用（ローカルでは `.env` に、GitHub Actionsではシークレットに設定）:
+X API用（ローカルでは `.env` に、GitHub Actionsではシークレットに設定）。`.env` は [src/config.py](src/config.py) の先頭で `load_dotenv()` により読み込む（`DRY_RUN` や `LOG_LEVEL` は import 時に評価されるため、`main.py` 側で読むと間に合わない）:
 - `X_API_KEY` - Consumer Key
 - `X_API_SECRET` - Consumer Secret
 - `X_ACCESS_TOKEN` - Access Token
