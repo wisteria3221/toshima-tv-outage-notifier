@@ -1,12 +1,24 @@
-# To get started with Dependabot version updates, you'll need to specify which
-# package ecosystems to update and where the package manifests are located.
-# Please see the documentation for more information:
+# Dependabot の設定
 # https://docs.github.com/github/administering-a-repository/configuration-options-for-dependency-updates
 # https://containers.dev/guide/dependabot
 
 version: 2
 updates:
+  # Dev Container の Feature（devcontainer-lock.json）
   - package-ecosystem: "devcontainers"
+    directory: "/"
+    schedule:
+      interval: weekly
+
+  # GitHub Actions（actions/checkout, astral-sh/setup-uv など）
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: weekly
+
+  # Python 依存（pyproject.toml / uv.lock）。CI は uv sync --frozen なので
+  # ロックファイルの更新は Dependabot に任せる
+  - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: weekly

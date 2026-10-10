@@ -164,20 +164,26 @@ GitHub Actions のみ（シークレット）:
 - push / PR 時に `ruff check` と `ruff format --check` を実行する
 - フォーマット差分だけでも失敗するので、コミット前に `uv run ruff format .` を通しておくこと
 
+**Dependabot**: [.github/dependabot.yml](.github/dependabot.yml)
+- `devcontainers`（Feature のロック）、`github-actions`（`actions/checkout` 等）、`uv`（`uv.lock`）を週次で更新する。`uv` の PR はロックファイルも更新されるので、CI の `uv sync --frozen` と整合する
+
 ## 実装上の重要なポイント
 
 **コーディング規約・環境**
 - Python 3.14 以上。バージョンの正本は `.python-version`（CI と Dev Container が参照）
 - docstring・コメント・ログメッセージは日本語で書く。ドメインデータは `@dataclass`、テストは対象ごとの `Test...` クラスでグルーピングする。詳細は [.kiro/steering/tech.md](.kiro/steering/tech.md) を参照
-- スクレイパーのテストは [tests/fixtures/trouble_list.html](tests/fixtures/trouble_list.html) の保存 HTML に依存する。サイト構造の変更に追従する際はフィクスチャも更新する
+- スクレイパーのテストは [tests/fixtures/trouble_list.html](tests/fixtures/trouble_list.html) の保存 HTML に依存する。本番と同じく `<a>` 内に `<p class="date">` と `<p class="ttl">` が分かれた構造にしてあるので、サイト構造の変更に追従する際はフィクスチャも更新する
+- [tests/conftest.py](tests/conftest.py) の autouse フィクスチャ `never_post_for_real` が `tweepy.Client.create_tweet` を必ず失敗させる。ローカルの `.env` に本物の認証情報があっても、モックを忘れたテストから本番投稿が走らないための保険。投稿処理そのものを試験するテストは `client` をモックに差し替える
 
 **スクレイピング戦略**
 - 取得対象は障害情報一覧の 1 ページ目のみ（`fetch_outage_list(max_pages=1)`）
 - 日本語テキストから日付、ステータス、タイトル、地域を抽出するために正規表現を使用
 - ステータス抽出: テキスト先頭（日付直後）の括弧内テキストのみ（`_RE_STATUS` は `match` で先頭固定）。地理的用語は除外し、タイトル途中の括弧（例「（STB）」）はステータスにしない
 - 地域抽出: 括弧内の地理的用語（丁目、付近、地区など）を識別
-- リトライロジック: 接続エラー・タイムアウト・5xx は 5回まで指数バックオフ（1/3/9/27 秒）で再試行。1ページ目を取得できなければ `UpstreamUnavailableError`
-- 4xx（404 の URL 変更、403 の UA ブロックなど）はリトライしても変わらないので即座に `UpstreamRejectedError`。`main()` は 1 を返す（2 にすると恒久的な破損が警告止まりで埋もれる）。ただし 2 ページ目以降の 4xx は「最終ページの次が無い」正常系なので、`fetch_outage_list()` が警告のみで打ち切り、取得済みの結果を返す
+- リトライロジック: 接続エラー・タイムアウト・5xx・408/429（`_TRANSIENT_CLIENT_ERRORS`）は 5回まで指数バックオフ（1/3/9/27 秒）で再試行。1ページ目を取得できなければ `UpstreamUnavailableError`
+- 上記以外の 4xx（404 の URL 変更、403 の UA ブロックなど）はリトライしても変わらないので即座に `UpstreamRejectedError`。`main()` は 1 を返す（2 にすると恒久的な破損が警告止まりで埋もれる）。ただし 2 ページ目以降の 4xx は「最終ページの次が無い」正常系なので、`fetch_outage_list()` が警告のみで打ち切り、取得済みの結果を返す
+- 同じ障害 ID へのリンクが 1 ページに複数あっても `_parse_list_page()` が最初の 1 件に重複排除する（サムネイル画像リンクや「詳しくはこちら」が追加されると同じ障害が 2 件になり二重投稿するため）
+- `ToshimaScraper` はコンテキストマネージャで、`main()` は `with` で使ってセッションを閉じる
 
 **状態の保持**
 - 既存障害の更新時は必ず `notified_statuses` を保持する
@@ -192,6 +198,8 @@ GitHub Actions のみ（シークレット）:
 - 「通知可否判定 → 投稿 → 通知済みマーク → カウンタ加算」の順序を保証
 - 投稿関数が例外を投げた場合も `"failed"` に変換する。tweepy は接続エラーを `TweepyException` に包まず `requests` の例外のまま投げるため、捕捉しないと `main()` の外側まで抜けて状態が保存されず、同じ実行で成功した通知のマークが失われて次回二重投稿になる
 - 投稿関数は `functools.partial` で束縛し、ループ内ラムダの遅延束縛を回避
+- X が同一本文の投稿を 403（duplicate content）で拒否した場合、`_post_tweet()` は **成功扱い（True）** にして通知済みマークさせる。投稿成功後に state の push が失敗した場合などに起こり、失敗扱いにすると「巻き戻し → 次回同じ本文を再投稿 → 再び 403」を毎回繰り返すため。それ以外の 403（権限不足など）は失敗のまま
+- レート制限で `"skipped"` になった件数は `main()` が最後に 1 回の WARNING にまとめる（`can_send_notification()` は 1 件ごとに呼ばれるので INFO に留める）
 
 **通知失敗をサイレントにしない**
 - 投稿が1件でも失敗（`"failed"`）したら `main()` は **1 を返す**。ただし状態は保存する
