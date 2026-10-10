@@ -217,6 +217,49 @@ class TestFetchWithRetry:
         assert "recovered" in result
 
 
+class TestResponseEncoding:
+    """レスポンスの文字コード決定のテスト"""
+
+    @responses_lib.activate
+    def test_declared_charset_is_respected(self, scraper, mocker):
+        """ヘッダで charset が宣言されていれば推定エンコーディングで上書きしないこと"""
+        body = "2025.12.09（復旧）通信障害（目白3丁目付近）"
+        responses_lib.add(
+            responses_lib.GET,
+            TOSHIMA_TROUBLE_URL,
+            body=body.encode("utf-8"),
+            status=200,
+            content_type="text/html; charset=utf-8",
+        )
+        # 推定が誤って Shift_JIS を返しても無視されること
+        apparent = mocker.patch(
+            "requests.Response.apparent_encoding",
+            new_callable=mocker.PropertyMock,
+            return_value="shift_jis",
+        )
+        result = scraper._fetch_with_retry(TOSHIMA_TROUBLE_URL)
+        assert result == body
+        apparent.assert_not_called()
+
+    @responses_lib.activate
+    def test_falls_back_to_apparent_encoding_without_charset(self, scraper):
+        """charset 未宣言のときは本文から推定したエンコーディングで読むこと
+
+        requests は text/* で charset が無いと ISO-8859-1 を既定にするため、
+        そのままでは日本語が文字化けする。
+        """
+        body = "2025.12.09（復旧）通信障害（目白3丁目付近）"
+        responses_lib.add(
+            responses_lib.GET,
+            TOSHIMA_TROUBLE_URL,
+            body=body.encode("utf-8"),
+            status=200,
+            content_type="text/html",
+        )
+        result = scraper._fetch_with_retry(TOSHIMA_TROUBLE_URL)
+        assert result == body
+
+
 class TestFetchOutageList:
     """fetch_outage_list のテスト"""
 

@@ -151,7 +151,7 @@ class ToshimaScraper:
                         f"HTTP {response.status_code}"
                     )
                 response.raise_for_status()
-                response.encoding = response.apparent_encoding
+                self._apply_fallback_encoding(response)
                 return response.text
 
             except requests.RequestException as e:
@@ -166,6 +166,22 @@ class ToshimaScraper:
                 time.sleep(wait_time)
 
         return None
+
+    @staticmethod
+    def _apply_fallback_encoding(response: requests.Response) -> None:
+        """Content-Type に charset が無い場合だけ本文からの推定エンコーディングを使う
+
+        ヘッダで charset が宣言されていればそれを信頼する。推定（apparent_encoding）は
+        短い本文で誤判定することがあり、無条件に上書きすると全角括弧が文字化けして
+        ステータス抽出が全滅する。
+
+        Args:
+            response: 取得したレスポンス（encoding をその場で書き換える）
+        """
+        content_type = response.headers.get("Content-Type", "")
+        if "charset=" in content_type.lower():
+            return
+        response.encoding = response.apparent_encoding
 
     def _parse_list_page(self, html: str) -> list[OutageInfo]:
         """一覧ページのHTMLをパース
