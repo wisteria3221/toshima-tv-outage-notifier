@@ -1,5 +1,7 @@
 """通知モジュールのテスト"""
 
+import json
+
 import pytest
 import requests
 import tweepy
@@ -364,6 +366,17 @@ class TestShouldNotifyChange:
         assert should_notify_change(manager, "status_change") is False
 
 
+def _forbidden(detail: str) -> tweepy.Forbidden:
+    """X API v2 の 403 応答を模した tweepy.Forbidden を生成する"""
+    response = requests.Response()
+    response.status_code = 403
+    response._content = json.dumps(
+        {"title": "Forbidden", "type": "about:blank", "status": 403, "detail": detail}
+    ).encode("utf-8")
+    response.headers["Content-Type"] = "application/json"
+    return tweepy.Forbidden(response)
+
+
 class TestPostTweetErrors:
     """投稿時のエラーハンドリングのテスト"""
 
@@ -378,6 +391,28 @@ class TestPostTweetErrors:
         """tweepy の例外は False を返すこと"""
         notifier = self._notifier_with_failing_client(
             mocker, tweepy.TweepyException("api error")
+        )
+        assert notifier._post_tweet("hello") is False
+
+    def test_duplicate_content_forbidden_is_treated_as_sent(self, mocker):
+        """同一内容による 403 は「既に投稿済み」として True を返すこと
+
+        投稿成功後に状態の push が失敗すると次回同じ本文を再投稿して 403 になる。
+        これを失敗扱いにすると巻き戻し → 再投稿 → 403 を毎回繰り返してしまう。
+        """
+        notifier = self._notifier_with_failing_client(
+            mocker,
+            _forbidden("You are not allowed to create a Tweet with duplicate content."),
+        )
+        assert notifier._post_tweet("hello") is True
+
+    def test_other_forbidden_returns_false(self, mocker):
+        """同一内容以外の 403（権限不足など）は失敗として False を返すこと"""
+        notifier = self._notifier_with_failing_client(
+            mocker,
+            _forbidden(
+                "Your client app is not configured with the appropriate permissions."
+            ),
         )
         assert notifier._post_tweet("hello") is False
 

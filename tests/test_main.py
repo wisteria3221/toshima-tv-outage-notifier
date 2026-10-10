@@ -350,6 +350,39 @@ class TestMainFunction:
         assert stored["status"] == "復旧"
         assert stored["notified_statuses"] == [""]
 
+    def test_skipped_notifications_are_summarized_once(self, mocker, tmp_path, caplog):
+        """上限でスキップした件数は 1 回の WARNING にまとめ、件ごとには警告しないこと"""
+        import logging
+
+        state_file = tmp_path / "state.json"
+        mocker.patch("src.main.STATE_FILE_PATH", state_file)
+        mocker.patch("src.notifier.DRY_RUN", True)
+        outages = [
+            OutageInfo(
+                id=str(i),
+                date="2025.12.20",
+                status="",
+                title=f"障害{i}",
+                area="",
+                url=f"https://www.toshima.co.jp/trouble/detail/{i}",
+            )
+            for i in range(3)
+        ]
+        mocker.patch("src.main.ToshimaScraper.fetch_outage_list", return_value=outages)
+        # ループ前のチェックは通し、件ごとのチェックで全件スキップさせる
+        mocker.patch(
+            "src.main.can_send_notification", side_effect=[True, False, False, False]
+        )
+        notify = mocker.patch("src.main.XNotifier.notify_new_outage")
+
+        with caplog.at_level(logging.WARNING):
+            assert main() == 0
+
+        notify.assert_not_called()
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "3 件の通知を投稿制限のためスキップしました" in warnings[0].getMessage()
+
     @staticmethod
     def _write_known_outage(state_file, outage, notified):
         """既知障害 1 件を含む状態ファイルを書き出す"""

@@ -101,9 +101,9 @@ def main() -> int:
 
         # 2. 障害情報をスクレイピング
         logger.info("障害情報を取得しています...")
-        scraper = ToshimaScraper()
         try:
-            outages = scraper.fetch_outage_list(max_pages=1)
+            with ToshimaScraper() as scraper:
+                outages = scraper.fetch_outage_list(max_pages=1)
         except UpstreamUnavailableError as e:
             # 上流サイトのタイムアウトや DNS 失敗は当プログラムの不具合ではなく、
             # 状態も変えないので次回実行で自然に再試行される。
@@ -156,6 +156,7 @@ def main() -> int:
         logger.info("通知を送信しています...")
         notifier = XNotifier()
         notification_sent = False
+        skipped_count = 0
         failed_outage_ids: list[str] = []
 
         # 新規障害の通知
@@ -174,6 +175,8 @@ def main() -> int:
             elif result == "failed":
                 failed_outage_ids.append(outage.id)
                 logger.error(f"新規障害の通知に失敗しました: {outage.title}")
+            else:
+                skipped_count += 1
 
         # ステータス変更の通知
         for change in changes.status_changes:
@@ -197,6 +200,15 @@ def main() -> int:
                     f"ステータス変更の通知に失敗しました: {change.outage.title} "
                     f"({change.old_status or '進行中'} -> {change.new_status or '進行中'})"
                 )
+            else:
+                skipped_count += 1
+
+        if skipped_count:
+            # 月間上限や 90% 到達時の絞り込みで意図的に送らなかった件数をまとめて警告する
+            logger.warning(
+                f"{skipped_count} 件の通知を投稿制限のためスキップしました"
+                f"（今月 {state_manager.get_notification_count_this_month()} 件送信済み）"
+            )
 
         # 7. 通知に失敗した障害だけを更新前の状態に巻き戻す
         # 失敗分を state から外して保存することで、次回実行で再度「新規」または

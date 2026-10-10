@@ -311,10 +311,38 @@ class XNotifier:
             logger.info(f"ツイートを投稿しました: ID={tweet_id}")
             return True
 
+        except tweepy.Forbidden as e:
+            # X は直近と同一本文の投稿を 403（duplicate content）で拒否する。
+            # 投稿成功後に状態の push が失敗した場合などに起こり、「失敗」扱いにすると
+            # 巻き戻し → 次回も同一本文で再投稿 → 再び 403 の無限ループになる。
+            # 本文はすでに X 上に存在するので、通知済みとして成功扱いにする。
+            if _is_duplicate_content_error(e):
+                logger.warning(
+                    f"同一内容の投稿が既に存在するため通知済みとして扱います: {e}"
+                )
+                return True
+            logger.error(f"ツイート投稿に失敗: {e}")
+            return False
+
         except (tweepy.TweepyException, requests.RequestException) as e:
             # tweepy は接続エラー等を requests の例外のまま投げるため両方を捕捉する
             logger.error(f"ツイート投稿に失敗: {e}")
             return False
+
+
+def _is_duplicate_content_error(error: tweepy.Forbidden) -> bool:
+    """403 が「同一内容の投稿」による拒否かどうかを判定する
+
+    X API v2 は detail に "duplicate content" を含むメッセージを返す。
+    tweepy の例外は str() で API のメッセージを含むため、文字列で判定する。
+
+    Args:
+        error: tweepy が送出した Forbidden 例外
+
+    Returns:
+        同一内容による拒否なら True
+    """
+    return "duplicate" in str(error).lower()
 
 
 def can_send_notification(state_manager: StateManager) -> bool:
@@ -329,7 +357,8 @@ def can_send_notification(state_manager: StateManager) -> bool:
     count = state_manager.get_notification_count_this_month()
 
     if count >= MONTHLY_TWEET_LIMIT:
-        logger.warning(f"月間投稿制限に達しました: {count}/{MONTHLY_TWEET_LIMIT}")
+        # 1 件ごとに呼ばれるため、ここでは INFO に留め、呼び出し側でまとめて警告する
+        logger.info(f"月間投稿制限に達しました: {count}/{MONTHLY_TWEET_LIMIT}")
         return False
 
     remaining = MONTHLY_TWEET_LIMIT - count
