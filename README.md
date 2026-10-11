@@ -135,6 +135,15 @@ GitHub Actions の `schedule`（毎時 22 分・52 分）と、外部 cron（cro
    - Schedule: 毎時 7 分・37 分
 3. トークンには有効期限があるため、期限切れ前に更新する。期限切れになると `schedule` のみのフォールバック運用になり、起動頻度が大きく落ちる（後述の Healthchecks.io で検知できる）
 
+cron-job.org の設定確認・変更（実行履歴の確認、トークンの差し替え、スケジュール変更、一時停止など）は、Claude Code 用スキル [.claude/skills/cron-job-org-api/](.claude/skills/cron-job-org-api/) の同梱 CLI でも行えます（API キーは cron-job.org Console の Settings で発行し、環境変数 `CRONJOB_API_KEY` か `.env` に設定。API は 1 日 100 リクエストまで）。
+
+```bash
+CJ="python3 .claude/skills/cron-job-org-api/scripts/cj.py"
+$CJ jobs list --table --tz Asia/Tokyo                       # jobId・スケジュール・最終結果
+$CJ history list <jobId> --table --tz Asia/Tokyo            # 直近の実行（成功なら HTTP 204）と次回予定
+$CJ jobs update <jobId> --header "Authorization: Bearer $NEW_GITHUB_TOKEN"   # トークン差し替え（他のヘッダーと本文は保持）
+```
+
 #### 実行結果の見方
 
 | 終了コード | 意味 | Actions 上の表示 |
