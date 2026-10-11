@@ -48,6 +48,10 @@ GitHub schedule（フォールバック）──┘        │
 - **`状態ファイルを読み込めません`**: `data/state.json` が壊れている（マージ衝突マーカー、書き込み途中、形式不正）。初期化せず止まる仕様なので、直前のコミットの内容と比較して手で修復するか、`git checkout` で戻す
 - **`予期しないエラー`**: スタックトレースを見てバグとして扱う
 
+ジョブが緑のまま出る WARNING（終了コードに影響しない）:
+
+- **`魚拓を n 件取得、m 件失敗`** / **`魚拓の認証情報が未設定のため取得をスキップします`**: 障害詳細ページの魚拓（Wayback Machine）はベストエフォートで、失敗してもジョブ失敗や Healthchecks のアラートにはならず、再試行もされない。失敗分の理由はその前の WARNING 行で見る（`status_ext` の `error:not-found` は詳細ページが既に削除されたもので対処不要、`error:too-many-requests` / `error:user-session-limit` は Wayback 側の制限、「時間切れ」は 120 秒以内に完了しなかったもの）。認証情報未設定の警告は、魚拓を使うならシークレットを登録する（手順は README）。それ以外は放置でよく、失敗が何日も続く場合だけ archive.org 側の状態とキーの有効性を確認する
+
 ## 状態ファイル（data/state.json）の扱い
 
 状態ファイルは通知判断の唯一の根拠。壊すと二重通知か欠落通知のどちらかが起きる。
@@ -56,6 +60,7 @@ GitHub schedule（フォールバック）──┘        │
 - **ローカルで実行したら戻す**。`DRY_RUN=true` でも通知済みマークとカウンタ加算が書き込まれる。`git checkout data/state.json` で戻してからコミットする
 - **Actions のコミットは `[skip ci]` 付き**。これにより Lint ワークフローが状態コミットで走らない。手動で状態をコミットするときも同じ流儀に揃える
 - **通知に失敗した障害は state.json に入らない**のが仕様。赤いランでも成功した分はコミットされる。失敗分が state.json に無いのは正常で、手で補完しない
+- **`archives` は魚拓の記録**で、通知判断には使わない。欠けていても二重通知・欠落通知は起きないので、失敗分を手で補完しない
 - スキーマ変更時は `StateManager.SCHEMA_VERSION` を上げ、旧形式を読んだときの扱い（そのまま読む／初期化する）を `_load_state()` で明示する
 
 ## レート制限時の挙動
@@ -73,6 +78,7 @@ X API Free 枠（月 500）に対し 450 を上限とし、月初（UTC）にリ
 | X API の 4 トークン | リポジトリのシークレット | 失効しないが、課金状態や権限変更で使えなくなる。失敗時は Developer Portal を確認 |
 | GitHub Fine-grained PAT（dispatch 用） | cron-job.org のヘッダ | **有効期限あり**。期限切れは Healthchecks 経由でしか気づけないので、期限より前にカレンダー等で更新を予定する。権限は対象リポジトリの `Actions: Read and write` のみ |
 | Healthchecks の Ping URL | リポジトリのシークレット | 期限なし。URL 自体が認証情報なのでログや Issue に貼らない |
+| Wayback Machine の S3 キー（`WAYBACK_ACCESS_KEY` / `WAYBACK_SECRET_KEY`） | リポジトリのシークレット / ローカル `.env` | 期限なし。任意で、未設定なら魚拓だけスキップされ通知は止まらない。漏えい時は https://archive.org/account/s3.php で再発行してシークレットを差し替える |
 
 - シークレットの値はリポジトリ・Issue・PR・ログに一切書かない。ログに出すのは「設定されているか」の真偽だけ
 - `.env` は Git 管理外。`.env.example` にはプレースホルダのみ置く
@@ -92,3 +98,4 @@ X API Free 枠（月 500）に対し 450 を上限とし、月初（UTC）にリ
 ---
 _手順と判断基準に絞る。設計の理由は tech.md、構造は structure.md を参照_
 _created_at: 2026-10-10_
+_updated_at: 2026-10-11（Wayback のシークレットと魚拓の WARNING の読み方を追記）_

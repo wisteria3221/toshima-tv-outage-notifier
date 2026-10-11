@@ -2,7 +2,7 @@
 
 ## アーキテクチャ
 
-単一プロセスのバッチ型パイプライン。`main.py` がオーケストレーターとなり、「スクレイピング → 差分検知 → 通知 → 状態保存」の各段階を順に実行する。各段階は専用モジュールに分離され、`src/config.py` が設定値・環境変数・認証情報の単一の供給源となる。
+単一プロセスのバッチ型パイプライン。`main.py` がオーケストレーターとなり、「スクレイピング → 差分検知 → 通知 → 魚拓取得 → 状態保存」の各段階を順に実行する。各段階は専用モジュールに分離され、`src/config.py` が設定値・環境変数・認証情報の単一の供給源となる。
 
 永続化はローカルの JSON ファイル（`data/state.json`）のみで完結し、データベースやサーバーを持たない。実行スケジューリングと状態のコミットは GitHub Actions が担い、状態ファイルが唯一の信頼できる情報源（Source of Truth）となる。
 
@@ -18,7 +18,7 @@
 
 開発パターンに影響するもののみ:
 
-- **requests + beautifulsoup4**: HTTP取得とHTML解析。スクレイピングの基盤
+- **requests + beautifulsoup4**: HTTP取得とHTML解析。スクレイピングの基盤（`requests` は Wayback Machine への保存要求にも使う）
 - **tweepy**: X (Twitter) API クライアント
 - **python-dotenv**: ローカルでの `.env` 読み込み（CI ではシークレットを使用）
 - テスト用: **pytest** / **responses**（HTTPモック）/ **pytest-mock**
@@ -44,6 +44,7 @@
 - 複数ファイルで使う fixture は `tests/conftest.py` に集約する。保存 HTML など固定データは `tests/fixtures/` に置き、サイト構造の変更に追従する際はフィクスチャも更新する
 - リトライのスリープは autouse fixture でモックし、テストを待たせない
 - `tests/conftest.py` の autouse fixture `never_post_for_real` が `tweepy.Client.create_tweet` を必ず失敗させ、モック漏れによる本番投稿を防ぐ
+- 同じく autouse fixture `no_wayback_credentials` が `WAYBACK_ACCESS_KEY` / `WAYBACK_SECRET_KEY` を削除し、モック漏れによる Wayback Machine への保存要求を防ぐ。`test_main.py` は `src.main.WaybackArchiver` を autouse でモックし、本物の archiver を使うテストは個別に patch し直す
 - `main()` のテストは `src.main.<名前>` のようにモジュール境界でパッチし、終了コードと状態ファイルの有無を検証する
 
 ## 開発環境
@@ -66,14 +67,15 @@ DRY RUN でもローカルの `data/state.json` には「通知済み」マー�
 ## 重要な技術的判断
 
 - **サーバーレス／DBレス運用**: 状態を Git 管理下の JSON に保存し、GitHub Actions がスケジュール・実行・コミットを担う。インフラコストゼロで運用する
-- **環境変数による設定注入**: X API認証・`DRY_RUN`・`LOG_LEVEL` はすべて環境変数経由。認証情報はコードに含めず、CI ではシークレットを使う
+- **環境変数による設定注入**: X API認証・Wayback の S3 キー・`DRY_RUN`・`LOG_LEVEL` はすべて環境変数経由。認証情報はコードに含めず、CI ではシークレットを使う
 - **冪等な通知設計**: 状態ファイルの `notified_statuses` により、再実行・スケジュール重複でも二重通知が起きない。一覧内の同一 ID リンクはパース時に重複排除し、状態の push 失敗後に同じ本文を再投稿して X が 403（duplicate content）を返した場合は「投稿済み」として成功扱いにし、失敗ループに陥らないようにする
 - **防御的なスクレイピング**: 指数バックオフ付きリトライ（`MAX_RETRIES`・`BACKOFF_FACTOR`）とタイムアウト（`REQUEST_TIMEOUT`）で外部サイトの不安定さに備える
 - **通知失敗をサイレントにしない**: 投稿が1件でも失敗したら `1` で終了してジョブ失敗として可視化する。失敗した障害だけ `update_outages()` 前の内容に巻き戻してから保存するので、次回実行で同じ変更が再検出・再試行され、同じ実行で成功した通知が二重投稿されることもない。過去に X API の `402 Payment Required` で約6ヶ月間気づかれずに通知が欠落した再発防止策
 - **上流不通と自分の失敗を区別する**: 1ページ目をリトライ後も取得できない場合は `UpstreamUnavailableError` → 終了コード `2`。としまテレビ側のタイムアウトやランナーの DNS 失敗が原因でプログラムの不具合ではないため、警告のみでジョブは成功扱いにしてノイズを減らす。「ページは取れたが 0 件」と 408/429 以外の 4xx 応答（`UpstreamRejectedError`、リトライなし）は URL 変更や UA ブロックなど恒久的な破損の疑いなので `1` にする。408/429 は一時的なので 5xx と同じリトライ経路に回す
 - **未起動検知（dead-man's switch）**: GitHub の `schedule` はベストエフォートで、起動しなかった実行は履歴に残らない。ワークフロー末尾で Healthchecks.io に ping し（シークレット `HEALTHCHECKS_URL`、未設定ならスキップ）、成功のみ通常 ping、`2` は `/log`、それ以外は `/fail` に送る。これにより「起動していない」「上流不通が長引いている」「失敗している」を区別してアラートできる
+- **魚拓はベストエフォート**: 障害詳細ページの魚拓は Wayback Machine の認証付き SPN2（S3 キー `WAYBACK_ACCESS_KEY` / `WAYBACK_SECRET_KEY`。匿名の Save Page Now は拒否される）で取り、すべての通知の後に回して速報性を落とさない。失敗は WARNING のみで再試行せず、終了コード・通知済みマーク・月間カウンタに影響させない（`archiver.py` は例外を出さず `None` を返し、`main` はさらに例外を隔離する）。認証情報が無ければ `HEALTHCHECKS_URL` と同じく機能だけスキップする。記録は `data/state.json` の障害エントリの `archives` 配列（`status` / `archived_at` / `url`）で、通知判断には使わない
 - **月間カウンタの境界は UTC**: 月のロールオーバー判定は `datetime.now(UTC)` で行う。ワークフローの `TZ=Asia/Tokyo` はログ表示用で、判定には影響しない
 
 ---
 _標準とパターンを記述し、すべての依存関係を列挙しない_
-_updated_at: 2026-10-10（終了コード契約・失敗可視化・未起動検知・外部 cron 主系・Dev Container を追記）_
+_updated_at: 2026-10-11（魚拓はベストエフォート・Wayback の認証情報・`no_wayback_credentials` を追記）_

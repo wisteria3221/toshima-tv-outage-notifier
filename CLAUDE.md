@@ -97,7 +97,8 @@ npx cc-sdd@latest --claude-skills --lang ja
 1. **スクレイピング** ([src/scraper.py](src/scraper.py)) → としまテレビのWebサイトから障害情報一覧を取得
 2. **状態管理** ([src/state_manager.py](src/state_manager.py)) → 現在の障害情報と保存済み状態を比較して変更を検出
 3. **通知** ([src/notifier.py](src/notifier.py)) → 変更をX（Twitter）へ投稿
-4. **永続化** → 状態を [data/state.json](data/state.json) に保存し、GitHub Actions経由でリポジトリへコミット
+4. **魚拓取得** ([src/archiver.py](src/archiver.py)) → 通知した障害の詳細ページを Wayback Machine に保存し、魚拓 URL を状態に記録（ベストエフォート。認証情報が無ければスキップ）
+5. **永続化** → 状態を [data/state.json](data/state.json) に保存し、GitHub Actions経由でリポジトリへコミット
 
 ### 主要コンポーネント
 
@@ -109,6 +110,7 @@ npx cc-sdd@latest --claude-skills --lang ja
 **状態ファイルフォーマット** ([data/state.json](data/state.json))
 - 既知の全障害を通知履歴とともに追跡
 - 各障害には `notified_statuses` 配列があり、重複通知を防ぐ
+- 各障害には `archives` 配列があり、魚拓の記録（`status` / `archived_at` / `url`）を追記する（スキーマ 1.2。`archives` を持たない旧形式のファイルも変換せずそのまま読む）
 - 月間通知カウンターを含み、レート制限に使用
 - 月が変わると自動的にカウンターをリセット（月判定は UTC。ワークフローの `TZ=Asia/Tokyo` は影響しない）
 
@@ -146,6 +148,7 @@ X API用（ローカルでは `.env` に、GitHub Actionsではシークレッ�
 オプション:
 - `DRY_RUN=true` - Xへの投稿をスキップ（テスト用）
 - `LOG_LEVEL=INFO` - ログレベル設定（DEBUG, INFO, WARNING, ERROR）
+- `WAYBACK_ACCESS_KEY` / `WAYBACK_SECRET_KEY` - Wayback Machine（archive.org）の S3 キー（任意。両方設定すると障害詳細ページの魚拓を取る。未設定なら魚拓だけスキップし通知は止まらない。ローカルでは `.env`、Actions ではシークレット）
 
 GitHub Actions のみ（シークレット）:
 - `HEALTHCHECKS_URL` - Healthchecks.io の Ping URL（任意。未設定なら死活報告ステップをスキップ）
@@ -162,7 +165,7 @@ GitHub Actions のみ（シークレット）:
 - Healthchecks への報告はコミットステップの `outcome` も見る。push に失敗したら checker が 0 でも `/fail` を送る（投稿済みの状態が保存されず次回二重投稿の恐れがあるため）
 - `data/state.json` を手で直すときは、cron-job.org のジョブを一時停止し実行中のランが無いのを確認してから push する（ランと同じ箇所を直すと上記の `-X theirs` でランの内容が勝ち、人の修正が黙って消える）
 - Lint とテストは実行しない（10 分ごとに重複させないため、[lint.yml](.github/workflows/lint.yml) に移した）。依存も本体分のみ（`uv sync --frozen`、dev extras なし）。テストが壊れたコードでも main に入れば障害チェックはそのまま走るので、push 後は lint.yml の結果を確認すること
-- リポジトリ設定でシークレットの設定が必要
+- リポジトリ設定でシークレットの設定が必要（X API の 4 つは必須。`WAYBACK_ACCESS_KEY` / `WAYBACK_SECRET_KEY` は任意で、Run outage checker ステップの `env` 経由で渡す。未設定でもジョブは動き魚拓だけスキップされる）
 
 **Lint・テストワークフロー**: [.github/workflows/lint.yml](.github/workflows/lint.yml)
 - push / PR 時に `ruff check` と `ruff format --check`、`pytest` を 1 ジョブで順に実行する（checkout と依存インストールを重複させないため。Lint が失敗してもテストは `if: !cancelled()` で実行する）
@@ -221,6 +224,16 @@ GitHub Actions のみ（シークレット）:
 **未起動検知（dead-man's switch）**
 - GitHub の `schedule` はベストエフォートで、実績では 1 日 48 回想定に対し 4〜7 回しか起動しない期間があった。起動しなかった実行は履歴に残らず気づけない
 - ワークフロー末尾で Healthchecks.io に ping する（シークレット `HEALTHCHECKS_URL`、未設定ならスキップ）。成功時のみ通常 ping、終了コード 2 は `/log`、それ以外は `/fail`
+
+**魚拓取得（Wayback Machine）** ([src/archiver.py](src/archiver.py))
+- 契機と対象: 新規検出・ステータス変更のうち通知結果が `"sent"` または `"skipped"` だった件の詳細 URL（`OutageInfo.url`）のみ。`"failed"` の件は対象外（巻き戻しで state から外れ、次回再検出時に取る）。一覧ページは取らない
+- 順序は「通知ループ → 巻き戻し → 魚拓 → 保存」（`main()` の手順 7、`_archive_outages()`）。通知の後に回すのは速報性のため（1 件あたり最大 `WAYBACK_TIMEOUT`=120 秒かかり、通知の前や合間に挟むとツイートがその分遅れる）。失敗分を対象に含めないので巻き戻しと魚拓の順序を入れ替えても記録が消えることはないが、記録を追記してから保存する流れを読みやすくするため巻き戻しの後に置く
+- ベストエフォート: `WaybackArchiver.archive()` は例外を送出せず、失敗はすべて WARNING + `None` に正規化する。`main` 側もさらに `try/except Exception` で隔離し、終了コード・通知済みマーク・月間カウンタ・`failed_outage_ids` には反映しない。失敗した件は記録せず再試行もしない（意図した仕様。レビューで「取りこぼし」として指摘しないこと）。末尾に「魚拓を n 件取得、m 件失敗」を出す（m > 0 なら WARNING。対象なし・認証情報なし・DRY RUN で試行 0 件のときは出さない）
+- 認証情報（`WAYBACK_ACCESS_KEY` / `WAYBACK_SECRET_KEY`）が揃っていなければ生成時に WARNING を 1 回出して無効化し、`archive()` は何も送らず `None`。対象が 0 件の実行では archiver を生成しない（毎回警告を出さないため）。値はログ・例外メッセージ・状態ファイルに出さない（`Authorization: LOW key:secret` ヘッダはセッションにだけ設定）
+- DRY RUN では保存要求を送らず対象 URL を INFO に出すだけ。`main` は `DRY_RUN` を見て「試行 0 件」として扱い、件数サマリの代わりに「[DRY RUN] 魚拓の取得を n 件スキップしました」を出す（失敗に数えると DRY RUN のたびに WARNING が出るため）
+- 記録は `StateManager.record_archive()` で障害エントリの `archives` 配列に追記する（`{"status", "archived_at", "url"}`、`archived_at` は UTC ISO 8601）。同じステータスの記録が既にあっても追記する。旧形式のエントリには初回追記時に配列を作る
+- SPN2 の `if_not_archived_within` は `WAYBACK_IF_NOT_ARCHIVED_WITHIN`=60 秒。既定の 1 時間のままだと新規検出から 1 時間以内の復旧で検出時の古いキャプチャが返るため、実行間隔（10 分）より短くして変更のたびに新しいキャプチャを作る。`capture_all` は付けず、404 の詳細ページ（`error:not-found`）は記録しない
+- テスト: [tests/conftest.py](tests/conftest.py) の autouse フィクスチャ `no_wayback_credentials` が両方の環境変数を削除し、ローカルの `.env` に本物のキーがあっても保存要求が出ないようにする（`never_post_for_real` と同じ目的）。[tests/test_main.py](tests/test_main.py) は autouse で `src.main.WaybackArchiver` をモックしているので、本物の archiver を使うテストは個別に patch し直す
 
 **メッセージフォーマット** ([src/notifier.py](src/notifier.py) の `_format_new_outage_message()` / `_format_status_change_message()`)
 - ヘッダーとタイトル行の決定は `_header_and_title_format()` に共通化。復旧/終了/完了（`_RESOLUTION_STATUSES`）なら "【としまテレビ {status}情報】" + "{title} が{status}しました"、それ以外のステータスがあれば既定ヘッダー + "{title}（{status}）"、ステータスなしなら既定ヘッダー + "{title}"

@@ -9,11 +9,13 @@
 - 障害のステータス変更（復旧、終了など）時にX（Twitter）へ通知
 - 重複通知の防止
 - 月間投稿制限の管理（X API Free プラン対応）
+- 通知した障害の詳細ページを Wayback Machine に保存（魚拓、任意）
 
 ## 必要要件
 
 - Python 3.14以上
 - X Developer アカウント（Free プラン以上）
+- archive.org アカウント（任意。障害詳細ページの魚拓を取る場合）
 
 ## セットアップ
 
@@ -82,6 +84,8 @@ X_ACCESS_TOKEN_SECRET=your_access_token_secret_here
 |---|---|---|
 | `DRY_RUN` | `false` | `true` にすると X への投稿をスキップする（動作確認用） |
 | `LOG_LEVEL` | `INFO` | ログレベル（`DEBUG` / `INFO` / `WARNING` / `ERROR`） |
+| `WAYBACK_ACCESS_KEY` | （なし） | 任意。`WAYBACK_SECRET_KEY` と両方設定すると、障害詳細ページの魚拓を Wayback Machine に取る（後述）。未設定なら魚拓だけスキップし、通知は通常どおり行う |
+| `WAYBACK_SECRET_KEY` | （なし） | 任意。archive.org の S3 シークレットキー。`WAYBACK_ACCESS_KEY` とセットで設定する |
 
 #### GitHub Actions の場合
 
@@ -95,6 +99,11 @@ X_ACCESS_TOKEN_SECRET=your_access_token_secret_here
 任意（未起動検知用、後述）:
 
 - `HEALTHCHECKS_URL`
+
+任意（魚拓用、後述）:
+
+- `WAYBACK_ACCESS_KEY`
+- `WAYBACK_SECRET_KEY`
 
 ## 使い方
 
@@ -177,6 +186,57 @@ gh secret set HEALTHCHECKS_URL --body "$PING_URL"
 終了コード 2（上流不通）のときは `/log` に記録のみ送り、期限はリセットしません。上流不通が長引いた場合も未起動と同様にアラートされます。
 終了コード 1 や依存インストール失敗などのときは `/fail` に送るので即時アラートになります。
 
+### 障害詳細ページの魚拓（Wayback Machine、任意）
+
+新規障害の検出時と各ステータス変更の検出時に、その障害の詳細ページ（`https://www.toshima.co.jp/trouble/detail/<id>`）を [Wayback Machine](https://web.archive.org/) に保存し、魚拓の URL を状態ファイルに記録します。公式ページが後から書き換えられたり削除されたりしても、通知時点の内容を第三者のアーカイブで参照できます。
+魚拓はすべての通知が終わった後に取るため、ツイートが遅れることはありません。魚拓の URL はツイートには載せません（`data/state.json` から参照します）。
+
+#### 認証情報の取得と設定
+
+Wayback Machine の Save Page Now は匿名では利用できないため、archive.org の S3 キーで認証します。
+
+1. [archive.org](https://archive.org/account/signup) で無料アカウントを作成する
+2. ログインした状態で https://archive.org/account/s3.php を開き、S3 API キー（Access Key と Secret Key）を発行する
+3. 取得したキーを設定する
+   - ローカル実行: `.env` に追記する
+
+     ```bash
+     WAYBACK_ACCESS_KEY=your_access_key_here
+     WAYBACK_SECRET_KEY=your_secret_key_here
+     ```
+
+   - GitHub Actions: リポジトリの Settings > Secrets and variables > Actions でシークレット `WAYBACK_ACCESS_KEY` と `WAYBACK_SECRET_KEY` を登録する（`gh secret set WAYBACK_ACCESS_KEY` などでも可）。ワークフローは Run outage checker ステップの `env` でこの 2 つを渡します
+
+両方が設定されているときだけ魚拓を取ります。未設定（または片方だけ）の場合は、魚拓の対象があった実行で「魚拓の認証情報が未設定のため取得をスキップします」と警告を 1 回出し、魚拓だけをスキップします。通知には影響しません。
+
+#### 記録の場所と形式
+
+魚拓の記録は `data/state.json` の各障害エントリの `archives` 配列に追記され、他の状態と一緒に GitHub Actions がコミットします。要素は魚拓を取った時点のステータス（`status`、空文字は進行中）、取得日時（`archived_at`、UTC）、魚拓の公開 URL（`url`）の 3 つで、ステータスが変わるたびに 1 件ずつ増えます。
+
+```json
+"archives": [
+  {
+    "status": "",
+    "archived_at": "2026-10-02T05:13:25.000000+00:00",
+    "url": "https://web.archive.org/web/20261002051318/https://www.toshima.co.jp/trouble/detail/121"
+  },
+  {
+    "status": "復旧",
+    "archived_at": "2026-10-02T07:32:58.000000+00:00",
+    "url": "https://web.archive.org/web/20261002073250/https://www.toshima.co.jp/trouble/detail/121"
+  }
+]
+```
+
+#### ベストエフォートであること
+
+- 魚拓の失敗（Wayback Machine 側の過負荷・レート制限・時間切れなど）は WARNING ログに残すだけで、再試行はしません。終了コードや Healthchecks への報告にも影響せず、ジョブは成功のまま終わります。失敗した魚拓は記録されず、後から自動で補われることもありません
+- 詳細ページが既に削除されて 404 になっている場合は、エラーページを魚拓として記録しません
+- 1 件あたりの待ち時間は最大約 2〜3 分（Wayback Machine 側の最大所要時間 2 分に HTTP のタイムアウトを加えたもの）です。通常の実行で対象になるのは 1〜2 件です
+- 通知に失敗した障害は魚拓の対象になりません（次回実行で再検出されたときに取ります）
+- `DRY_RUN=true` のときは保存要求を送らず、「[DRY RUN] 魚拓の取得を n 件スキップしました」とログに出します
+- 実行結果はログで確認します。「魚拓を n 件取得、m 件失敗」の行が m > 0 のときは WARNING になり、各件の失敗理由はその前の行に出ています
+
 ## ディレクトリ構成
 
 ```
@@ -195,6 +255,7 @@ toshima-tv-outage-notifier/
 │   ├── scraper.py             # スクレイピング
 │   ├── state_manager.py       # 状態管理
 │   ├── notifier.py            # X API連携
+│   ├── archiver.py            # Wayback Machine への魚拓取得
 │   └── main.py                # エントリーポイント
 ├── tests/
 │   ├── conftest.py            # 共通フィクスチャ
@@ -213,7 +274,7 @@ toshima-tv-outage-notifier/
 
 ### 状態ファイル（data/state.json）
 
-既知の障害とその通知履歴（`notified_statuses`）、月間通知カウンターを保持するファイルで、Git 管理対象です。
+既知の障害とその通知履歴（`notified_statuses`）、魚拓の記録（`archives`、前述）、月間通知カウンターを保持するファイルで、Git 管理対象です。
 GitHub Actions は終了コードが 0 または 1 のとき変更を `[skip ci]` 付きで自動コミットします（1 のときは通知に成功した分だけが保存され、失敗した障害は次回実行で再検出されます）。
 
 - このファイルが通知の唯一の判断基準です。手動で編集・削除すると、既知の障害を再通知したり、通知済みの状態を見失ったりします
