@@ -67,7 +67,7 @@
   - _Boundary: ワークフロー・ドキュメント_
   - _Requirements: 5.1, 5.3_
 
-- [ ] 4. 検証: 全体の品質ゲートと動作確認
+- [x] 4. 検証: 全体の品質ゲートと動作確認
   - 全テストスイートを実行し全件通過を確認する。`uv run ruff check .` と `uv run ruff format --check .` で違反・差分がないことを確認する
   - 認証情報を設定せずに `DRY_RUN=true` で本物の一覧ページに対して実行し、魚拓の警告（未設定）またはスキップのログが出て終了コードが 0 であることを確認する。確認後に `data/state.json` を戻す
   - 変更コードが型ヒント・日本語の docstring とコメント・isort 規約の import 順・命名規約（内部ヘルパーの `_` プレフィックス、定数の UPPER_SNAKE_CASE）を守っていることを確認する
@@ -81,3 +81,4 @@
 - 2.1: `time.monotonic` を `side_effect` のリストでモックするテストは、呼び出し回数（開始時 1 回 + pending ごとに 1 回）ぶんの値を用意すること。
 - 2.2: 既存の `data/state.json` の `schema_version` は読み込み時に書き換えない（変更のない実行まで dirty になるため）。ファイルを自己記述的に保ちたい場合は、cron-job.org を停止しラン無しを確認した上で `"1.2"` に手で揃える（前回 1.0→1.1 と同じ運用）。
 - 3.1: archiver の `archive()` は DRY RUN でも失敗でも None を返すため、main 側で `DRY_RUN` を見て DRY RUN を「試行 0 件」として扱う（失敗に数えると DRY RUN のたびに WARNING サマリが出る）。tests/test_main.py は autouse で `src.main.WaybackArchiver` をモックしており、本物の archiver を使うテストは個別に再パッチする。
+- 4: 本物の一覧ページに対する DRY RUN は、state.json が最新だと差分が出ず魚拓の経路を通らない。経路を確認するときは `data/state.json` から 1 件を一時的に外して「新規検出」を作り、`git checkout -- data/state.json` で戻す（認証情報なし → WARNING 1 回、ダミー認証情報あり → `[DRY RUN]` の INFO のみで要求も記録も無し、を確認済み 2026-10-11）。
