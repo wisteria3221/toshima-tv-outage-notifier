@@ -35,7 +35,7 @@
 - 有効ルール: `E/W/F/I/N/UP/B/C4/SIM/PIE/RET/ARG`。フォーマットは line-length 88・ダブルクォート
 - import の並びは isort 規約（標準ライブラリ → サードパーティ → first-party `src`）に従う
 - docstring・コメント・ログメッセージは日本語で記述する
-- CI では `ruff check` に加えて `ruff format --check` も走る（フォーマット差分だけで失敗する）。障害チェックのワークフローも本処理の前に Lint とテストを実行するため、コミット前に `uv run ruff check --fix . && uv run ruff format .` と `uv run pytest` を通す
+- CI では `ruff check` に加えて `ruff format --check` も走る（フォーマット差分だけで失敗する）。Lint とテストは push / PR 時の lint.yml で実行され、障害チェックのワークフローでは実行しない（テストが壊れたコードでも main に入れば障害チェックは走る）ため、コミット前に `uv run ruff check --fix . && uv run ruff format .` と `uv run pytest` を通す
 
 ### テスト
 - `tests/` 配下に pytest で配置。`testpaths = ["tests"]`

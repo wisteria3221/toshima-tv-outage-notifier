@@ -165,7 +165,7 @@ GitHub Actions のみ（シークレット）:
 - リポジトリ設定でシークレットの設定が必要
 
 **Lint・テストワークフロー**: [.github/workflows/lint.yml](.github/workflows/lint.yml)
-- push / PR 時に `ruff check` と `ruff format --check`、`pytest` を実行する（別ジョブ）
+- push / PR 時に `ruff check` と `ruff format --check`、`pytest` を 1 ジョブで順に実行する（checkout と依存インストールを重複させないため。Lint が失敗してもテストは `if: !cancelled()` で実行する）
 - フォーマット差分だけでも失敗するので、コミット前に `uv run ruff format .` を通しておくこと
 
 **Dependabot**: [.github/dependabot.yml](.github/dependabot.yml)
