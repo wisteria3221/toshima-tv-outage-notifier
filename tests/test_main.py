@@ -202,8 +202,8 @@ class TestMainFunction:
     def test_monthly_limit_is_enforced_within_a_single_run(self, mocker, tmp_path):
         """残り 1 件の状態で新規が 2 件あっても、上限を超えて送らないこと
 
-        can_send_notification はループ前にも評価されるが、1 回の実行で複数件送ると
-        その間にカウンタが進むため、1 件ごとに再確認しないと上限を超えてしまう。
+        1 回の実行で複数件送るとその間にカウンタが進むため、can_send_notification を
+        1 件ごとに評価しないと上限を超えてしまう。
         """
         from datetime import UTC, datetime
 
@@ -369,9 +369,9 @@ class TestMainFunction:
             for i in range(3)
         ]
         mocker.patch("src.main.ToshimaScraper.fetch_outage_list", return_value=outages)
-        # ループ前のチェックは通し、件ごとのチェックで全件スキップさせる
+        # 件ごとのチェックで全件スキップさせる（ループ前のまとめ判定は無い）
         mocker.patch(
-            "src.main.can_send_notification", side_effect=[True, False, False, False]
+            "src.main.can_send_notification", side_effect=[False, False, False]
         )
         notify = mocker.patch("src.main.XNotifier.notify_new_outage")
 

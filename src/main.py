@@ -56,8 +56,8 @@ def _process_notification(
     # 通知可否判定 → 投稿 → 通知済みマーク → カウンタ加算 の順序を保つ。
     # can_send_notification / should_notify_change が False の場合は意図的なスキップ
     # （"skipped"）、投稿が失敗した場合は "failed" として呼び出し側でエラー扱いする。
-    # 月間上限はループ前にも見ているが、1 回の実行で複数件送るとその間にカウンタが
-    # 進むため、1 件ごとに再確認して上限を超えないようにする。
+    # 1 回の実行で複数件送るとその間にカウンタが進むため、月間上限は 1 件ごとに
+    # 判定して上限を超えないようにする。
     if not can_send_notification(state_manager):
         return "skipped"
     if not should_notify_change(state_manager, change_type):
@@ -137,14 +137,7 @@ def main() -> int:
             f"ステータス変更 {len(changes.status_changes)} 件"
         )
 
-        # 4. 投稿制限チェック
-        if not can_send_notification(state_manager):
-            logger.warning("月間投稿制限のため通知をスキップします")
-            state_manager.update_outages(outages)
-            state_manager.save_state()
-            return EXIT_SUCCESS
-
-        # 5. 状態を先に更新する
+        # 4. 状態を先に更新する
         # mark_notified() は state に存在する障害しかマークしないため、
         # 通知ループの前に新規障害を state へ登録しておく必要がある。
         # （これより前に呼ぶと新規障害の notified_statuses が常に空のままになる）
@@ -152,7 +145,11 @@ def main() -> int:
         snapshot = state_manager.snapshot_outages()
         state_manager.update_outages(outages)
 
-        # 6. 通知送信
+        # 5. 通知送信
+        # 投稿制限（月間上限・90% 到達時の絞り込み）は _process_notification() が
+        # 1 件ごとに判定する。ループ前に can_send_notification() でまとめて判定する
+        # 早期終了は、結果が件ごとのスキップと同じ（state 更新・保存・終了コード 0）で
+        # ログだけが異なり、スキップの意味を変えるときに 2 箇所直す必要があるため置かない。
         logger.info("通知を送信しています...")
         notifier = XNotifier()
         notification_sent = False
@@ -210,14 +207,14 @@ def main() -> int:
                 f"（今月 {state_manager.get_notification_count_this_month()} 件送信済み）"
             )
 
-        # 7. 通知に失敗した障害だけを更新前の状態に巻き戻す
+        # 6. 通知に失敗した障害だけを更新前の状態に巻き戻す
         # 失敗分を state から外して保存することで、次回実行で再度「新規」または
         # 「ステータス変更」として検出されリトライされる。成功分のマークとカウンタは
         # 保存するので、同じ実行内で成功した通知が次回二重に投稿されることはない。
         if failed_outage_ids:
             state_manager.rollback_outages(failed_outage_ids, snapshot)
 
-        # 8. 状態保存
+        # 7. 状態保存
         logger.info("状態を保存しています...")
         saved = state_manager.save_state()
 
@@ -226,7 +223,7 @@ def main() -> int:
         else:
             logger.info("状態に変更がないため保存をスキップしました")
 
-        # 9. 通知失敗があればエラー終了する
+        # 8. 通知失敗があればエラー終了する
         # GitHub Actions のジョブが失敗するため、サイレントな取りこぼしを防ぐ。
         # 状態はすでに保存済みで、ワークフローは終了コード 1 でもコミットする。
         if failed_outage_ids:
