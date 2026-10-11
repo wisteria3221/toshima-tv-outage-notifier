@@ -24,6 +24,7 @@ GitHub schedule（フォールバック）──┘        │
 | Healthchecks.io | dead-man's switch。Period 10 分 / Grace 30 分 | ping 途絶で通知先にアラート |
 
 - `concurrency: group: check-outage` で直列化しているため、2 経路が重なっても state.json の push は衝突しない。「待機中のラン」が見えるのは正常
+- `concurrency` は Actions 同士しか直列化しない。人が `data/state.json` を手で直して push するときは、cron-job.org のジョブを一時停止し（`cron-job-org-api` スキル参照）、実行中のランが無いのを確認してから push し、終わったら再開する。ランと push が重なり同じ箇所で衝突した場合はランの内容（投稿済みツイートの反映）が優先され、人の修正は消える
 - Healthchecks 未設定（`HEALTHCHECKS_URL` 空）の構成は許容するが、その場合は未起動を検知できないことを理解した上で運用する
 
 ## 実行結果の読み方と対処

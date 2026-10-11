@@ -158,7 +158,9 @@ GitHub Actions のみ（シークレット）:
 - `concurrency: group: check-outage` で重複起動を直列化（state.json の push 衝突防止）
 - Actionsタブから手動実行可能
 - `data/state.json` の変更を `[skip ci]` フラグ付きで自動コミット
-- push が拒否された場合（人が main に push した直後など。`concurrency` は Actions 同士しか直列化しない）は `git pull --rebase` して 1 回だけ再試行する。投稿済みの状態をコミットできないと次回二重投稿になるため
+- push が拒否された場合（人が main に push した直後など。`concurrency` は Actions 同士しか直列化しない）は `git pull --rebase -X theirs` して 1 回だけ再試行する。投稿済みの状態をコミットできないと次回二重投稿になるため。`state.json` が衝突したらランの内容を優先する（投稿済みツイートを反映しているのはラン側。人の編集はやり直せる）。行単位のマージは JSON の構文を保証しないので push 前に `python3 -m json.tool` で検証し、壊れていればジョブを失敗させる。rebase 先は `GITHUB_REF_NAME`（`main` 固定ではない）
+- Healthchecks への報告はコミットステップの `outcome` も見る。push に失敗したら checker が 0 でも `/fail` を送る（投稿済みの状態が保存されず次回二重投稿の恐れがあるため）
+- `data/state.json` を手で直すときは、cron-job.org のジョブを一時停止し実行中のランが無いのを確認してから push する（ランと同じ箇所を直すと上記の `-X theirs` でランの内容が勝ち、人の修正が黙って消える）
 - Lint とテストは実行しない（10 分ごとに重複させないため、[lint.yml](.github/workflows/lint.yml) に移した）。依存も本体分のみ（`uv sync --frozen`、dev extras なし）。テストが壊れたコードでも main に入れば障害チェックはそのまま走るので、push 後は lint.yml の結果を確認すること
 - リポジトリ設定でシークレットの設定が必要
 

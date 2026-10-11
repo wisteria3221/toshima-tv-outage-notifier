@@ -71,6 +71,7 @@ jobs:
       # 次回実行で同じ障害を二重投稿してしまうため。
       # 終了コード 2（上流不通）やステップ自体の異常終了（exit_code 未設定）ではコミットしない。
       - name: Commit state changes
+        id: commit
         if: ${{ !cancelled() && contains(fromJSON('["0", "1"]'), steps.checker.outputs.exit_code) }}
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
@@ -84,22 +85,41 @@ jobs:
           # concurrency は Actions 同士しか直列化しないため、人が main に push した直後の
           # 実行では push が拒否される。そのまま失敗すると投稿済みの状態がコミットされず
           # 次回実行で二重投稿になるので、リベースして 1 回だけ再試行する。
-          git push || (git pull --rebase origin main && git push)
+          #   -X theirs: rebase では「再適用する側」= このランのコミット。state.json が衝突したら
+          #              投稿済みツイートを反映しているランの内容を優先する（人の編集は本人がやり直せる）
+          #   JSON 検証: 行単位のマージは JSON の構文を保証しない。壊れた state.json を push すると
+          #              以降の全実行が StateFileError で止まるため、push 前に読めることを確認する
+          git push || {
+            echo "push が拒否されたためリベースして再試行します"
+            git pull --rebase -X theirs origin "$GITHUB_REF_NAME" \
+              && python3 -m json.tool data/state.json > /dev/null \
+              && git push
+          } || {
+            echo "::error title=State push failed::リベース後の data/state.json を push できませんでした（衝突または JSON 破損）。手動で修復してください。"
+            exit 1
+          }
 
       # 死活報告（dead-man's switch）。常に実行し、結果に応じて送り先を変える。
       #   成功(0)      → 通常 ping（Healthchecks の期限をリセット）
       #   上流不通(2)  → /log（記録のみ。期限はリセットしないので、長引けば未起動と同様にアラート）
       #   それ以外     → /fail（即時アラート。依存インストール失敗などで exit_code が空の場合も含む）
+      #   状態のコミット/push に失敗した場合も /fail（checker は 0 でも、投稿済みの状態が
+      #   保存されておらず次回二重投稿の恐れがあるため）
       - name: Report to Healthchecks.io
         if: always() && env.HEALTHCHECKS_URL != ''
         env:
           EXIT_CODE: ${{ steps.checker.outputs.exit_code }}
+          COMMIT_OUTCOME: ${{ steps.commit.outcome }}
         run: |
-          case "$EXIT_CODE" in
-            0) endpoint="" ;;
-            2) endpoint="/log" ;;
-            *) endpoint="/fail" ;;
-          esac
+          if [ "$COMMIT_OUTCOME" = "failure" ]; then
+            endpoint="/fail"
+          else
+            case "$EXIT_CODE" in
+              0) endpoint="" ;;
+              2) endpoint="/log" ;;
+              *) endpoint="/fail" ;;
+            esac
+          fi
           curl -fsS -m 10 --retry 3 -o /dev/null \
-            --data-raw "run_id=${GITHUB_RUN_ID} exit_code=${EXIT_CODE:-none}" \
+            --data-raw "run_id=${GITHUB_RUN_ID} exit_code=${EXIT_CODE:-none} commit=${COMMIT_OUTCOME:-none}" \
             "${HEALTHCHECKS_URL}${endpoint}"
