@@ -37,7 +37,7 @@ jobs:
 
       # Python は .python-version に従って uv がインストールする
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       # Lint とテストは push / PR 時に lint.yml で実行する（10 分ごとの定期実行では重複させない）。
       # 実行に必要なのは本体の依存だけなので dev extras は入れない。
