@@ -80,8 +80,9 @@ def _request_timeout(deadline: float) -> float:
     remaining = deadline - monotonic()
     if remaining <= 0:
         raise _DeadlineError("期限を過ぎました")
-    # requests の timeout は接続と読み取りに別々に効くため、1 要求が期限を超えて
-    # ブロックする時間は最大この値ぶん（REQUEST_TIMEOUT 以下）に収まる
+    # requests の timeout は接続と読み取りに別々に効き、本文の受信全体には効かない。
+    # 通常は 1 要求が期限を超えてブロックするのは最大この値ぶん（REQUEST_TIMEOUT 以下）
+    # だが、応答を少しずつ送り続けるサーバーでは超えうる（許容する）
     return min(REQUEST_TIMEOUT, remaining)
 
 

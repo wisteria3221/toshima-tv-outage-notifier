@@ -642,6 +642,35 @@ class TestArchiveIntegration:
 
         archiver_class.assert_not_called()
 
+    def test_save_error_after_archiving_does_not_change_exit_code(
+        self, mocker, state_file, fetch, allow_sending, archiver, sample_outage, caplog
+    ):
+        """魚拓の記録の保存に失敗しても終了コードは 0 のままで、通知済みの状態は残ること"""
+        fetch.return_value = [sample_outage]
+        mocker.patch("src.main.XNotifier._post_tweet", return_value=True)
+        real_save = StateManager.save_state
+        calls = 0
+
+        def _save(self, force=False):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("No space left on device")
+            return real_save(self, force)
+
+        mocker.patch.object(StateManager, "save_state", _save)
+
+        with caplog.at_level(logging.ERROR):
+            assert main() == 0
+
+        assert calls == 2
+        assert "魚拓の記録を状態ファイルに保存できませんでした" in [
+            r.getMessage() for r in caplog.records
+        ]
+        stored = _read_state(state_file)["outages"][sample_outage.id]
+        assert stored["notified_statuses"] == [""]
+        assert stored["archives"] == []
+
     def test_cleanup_error_of_disabled_archiver_is_not_counted_as_failure(
         self, mocker, state_file, fetch, allow_sending, archiver, sample_outage, caplog
     ):

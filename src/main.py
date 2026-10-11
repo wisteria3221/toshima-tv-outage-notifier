@@ -350,7 +350,13 @@ def main() -> int:
                 logger.info(archive_summary)
 
         # 9. 魚拓の記録を保存する（記録が無ければ dirty でないので書き込みはスキップされる）
-        state_manager.save_state()
+        # 通知済みの状態は手順 7 で保存済みで、ここで書くのは魚拓の記録だけ。魚拓は
+        # ベストエフォートなので、書き込みに失敗しても終了コードを変えない（save_state は
+        # 一時ファイルから差し替えるので、失敗しても手順 7 の内容がそのまま残る）
+        try:
+            state_manager.save_state()
+        except OSError:
+            logger.exception("魚拓の記録を状態ファイルに保存できませんでした")
 
         # 10. 通知失敗があればエラー終了する
         # GitHub Actions のジョブが失敗するため、サイレントな取りこぼしを防ぐ。

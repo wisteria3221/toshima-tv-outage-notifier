@@ -15,7 +15,7 @@ from .config import (
     MAX_RETRIES,
     REQUEST_TIMEOUT,
     TOSHIMA_TROUBLE_URL,
-    TRANSIENT_CLIENT_ERRORS,
+    is_transient_status,
 )
 
 logger = logging.getLogger(__name__)
@@ -182,9 +182,8 @@ class ToshimaScraper:
         for attempt in range(MAX_RETRIES):
             try:
                 response = self.session.get(url, timeout=REQUEST_TIMEOUT)
-                if (
-                    400 <= response.status_code < 500
-                    and response.status_code not in TRANSIENT_CLIENT_ERRORS
+                if 400 <= response.status_code < 500 and not is_transient_status(
+                    response.status_code
                 ):
                     raise UpstreamRejectedError(
                         f"障害情報ページが拒否されました: {url} - "
