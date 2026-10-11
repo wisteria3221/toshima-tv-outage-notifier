@@ -6,6 +6,7 @@ from dataclasses import replace
 
 import pytest
 
+from src.archiver import WaybackArchiver
 from src.config import MONTHLY_TWEET_LIMIT
 from src.main import EXIT_UPSTREAM_UNAVAILABLE, main
 from src.scraper import UpstreamRejectedError, UpstreamUnavailableError
@@ -29,6 +30,29 @@ def fetch(mocker):
 def allow_sending(mocker):
     """月間上限に達していない状態として扱う"""
     return mocker.patch("src.main.can_send_notification", return_value=True)
+
+
+@pytest.fixture(autouse=True)
+def archiver_class(mocker):
+    """main() が生成する WaybackArchiver をクラスごとモックに差し替える
+
+    既定では有効（enabled=True）だが archive() は None（失敗）を返す。これにより
+    認証情報なしの警告が他のテストの WARNING 件数に混ざらず、魚拓の成否を試したい
+    テストは archive.return_value / side_effect を上書きするだけでよい。
+    本物の archiver を使うテストは、このフィクスチャより後に patch し直す。
+    """
+    cls = mocker.patch("src.main.WaybackArchiver")
+    instance = cls.return_value
+    instance.enabled = True
+    instance.archive.return_value = None
+    instance.__enter__.return_value = instance
+    return cls
+
+
+@pytest.fixture
+def archiver(archiver_class):
+    """モック archiver のインスタンス（archive の呼び出しと戻り値を扱う）"""
+    return archiver_class.return_value
 
 
 def _write_state(state_file, outages=(), notified=(), count=0):
@@ -271,9 +295,16 @@ class TestMainFunction:
             assert main() == 0
 
         notify.assert_not_called()
-        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-        assert len(warnings) == 1
-        assert "3 件の通知を投稿制限のためスキップしました" in warnings[0].getMessage()
+        # スキップ件は魚拓の対象になり、モック archiver は失敗するので魚拓のサマリ
+        # WARNING も出る。ここで数えるのは投稿制限の警告だけ
+        warnings = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "投稿制限" in r.getMessage()
+        ]
+        assert warnings == [
+            "3 件の通知を投稿制限のためスキップしました（今月 0 件送信済み）"
+        ]
 
     def test_new_outage_marks_notified_status_end_to_end(
         self, mocker, state_file, fetch, allow_sending, sample_outage
@@ -293,3 +324,260 @@ class TestMainFunction:
         outage = state["outages"][sample_outage.id]
         assert outage["notified_statuses"] == [sample_outage.status]
         assert state["stats"]["total_notifications_this_month"] == 1
+
+
+ARCHIVED_URL = "https://web.archive.org/web/20261002051318/{url}"
+
+
+def _archived(url: str) -> str:
+    """詳細 URL に対応する魚拓の公開 URL（モック archiver の戻り値用）"""
+    return ARCHIVED_URL.format(url=url)
+
+
+class TestArchiveIntegration:
+    """main() の通知ループ後に行う魚拓取得のテスト"""
+
+    def test_archives_each_change_after_all_notifications(
+        self, mocker, state_file, fetch, allow_sending, archiver, make_outage
+    ):
+        """新規 1 件 + ステータス変更 1 件で、通知 2 件の後に魚拓が各詳細 URL で 2 回呼ばれ、
+        各ステータスの記録が保存されること"""
+        known = make_outage("1", title="既知の障害", area="")
+        new = make_outage("2", date="2025.12.21", title="新しい障害", area="")
+        _write_state(state_file, [known], notified=[""])
+        recovered = replace(known, status="復旧")
+        fetch.return_value = [new, recovered]
+        archiver.archive.side_effect = _archived
+
+        manager = mocker.Mock()
+        manager.attach_mock(
+            mocker.patch("src.main.XNotifier.notify_new_outage", return_value=True),
+            "notify_new",
+        )
+        manager.attach_mock(
+            mocker.patch("src.main.XNotifier.notify_status_change", return_value=True),
+            "notify_change",
+        )
+        manager.attach_mock(archiver.archive, "archive")
+
+        assert main() == 0
+
+        # 通知 2 件がすべて終わってから魚拓を取り始め、順序は新規 → ステータス変更
+        assert [c[0] for c in manager.mock_calls] == [
+            "notify_new",
+            "notify_change",
+            "archive",
+            "archive",
+        ]
+        assert manager.archive.call_args_list == [
+            mocker.call(new.url),
+            mocker.call(known.url),
+        ]
+
+        state = _read_state(state_file)
+        new_archives = state["outages"][new.id]["archives"]
+        assert len(new_archives) == 1
+        assert new_archives[0]["status"] == ""
+        assert new_archives[0]["url"] == _archived(new.url)
+        assert new_archives[0]["archived_at"]
+        known_archives = state["outages"][known.id]["archives"]
+        assert len(known_archives) == 1
+        assert known_archives[0]["status"] == "復旧"
+        assert known_archives[0]["url"] == _archived(known.url)
+        # 魚拓は通知済みマークとカウンタに影響しない
+        assert state["outages"][new.id]["notified_statuses"] == [""]
+        assert state["outages"][known.id]["notified_statuses"] == ["", "復旧"]
+        assert state["stats"]["total_notifications_this_month"] == 2
+
+    def test_archives_even_when_notification_is_skipped(
+        self, mocker, state_file, fetch, archiver, sample_outage
+    ):
+        """投稿制限で通知がスキップされても、魚拓は取得して記録されること"""
+        fetch.return_value = [sample_outage]
+        mocker.patch("src.main.can_send_notification", return_value=False)
+        notify = mocker.patch("src.main.XNotifier.notify_new_outage")
+        archiver.archive.side_effect = _archived
+
+        assert main() == 0
+
+        notify.assert_not_called()
+        archiver.archive.assert_called_once_with(sample_outage.url)
+        stored = _read_state(state_file)["outages"][sample_outage.id]
+        assert stored["notified_statuses"] == []
+        assert [a["url"] for a in stored["archives"]] == [_archived(sample_outage.url)]
+
+    def test_failed_notification_is_not_archived(
+        self, mocker, state_file, fetch, allow_sending, archiver, make_outage
+    ):
+        """通知が失敗した障害は魚拓を取らず、巻き戻し後の状態にも記録が無いこと"""
+        ok = make_outage("1", title="成功する障害", area="")
+        ng = make_outage("2", date="2025.12.21", title="失敗する障害", area="")
+        fetch.return_value = [ok, ng]
+        mocker.patch(
+            "src.main.XNotifier.notify_new_outage",
+            side_effect=lambda outage: outage.id == ok.id,
+        )
+        archiver.archive.side_effect = _archived
+
+        assert main() == 1
+
+        archiver.archive.assert_called_once_with(ok.url)
+        state = _read_state(state_file)
+        assert [a["url"] for a in state["outages"][ok.id]["archives"]] == [
+            _archived(ok.url)
+        ]
+        assert ng.id not in state["outages"]
+
+    def test_archive_exception_does_not_affect_exit_code_or_state(
+        self, mocker, state_file, fetch, allow_sending, archiver, sample_outage, caplog
+    ):
+        """魚拓が例外を投げても終了コード 0 で状態が保存され、通知済みマークが残ること"""
+        mocker.patch("src.notifier.DRY_RUN", True)
+        fetch.return_value = [sample_outage]
+        archiver.archive.side_effect = RuntimeError("boom")
+
+        with caplog.at_level(logging.INFO):
+            assert main() == 0
+
+        stored = _read_state(state_file)["outages"][sample_outage.id]
+        assert stored["notified_statuses"] == [""]
+        assert stored["archives"] == []
+        assert _read_state(state_file)["stats"]["total_notifications_this_month"] == 1
+        assert any(
+            r.levelno == logging.ERROR and "boom" in (r.exc_text or "")
+            for r in caplog.records
+        )
+
+    def test_archive_failure_is_summarized_as_warning(
+        self, mocker, state_file, fetch, allow_sending, archiver, sample_outage, caplog
+    ):
+        """魚拓が None（失敗）でも記録が増えず終了コード 0 で、サマリが WARNING に出ること"""
+        mocker.patch("src.notifier.DRY_RUN", True)
+        fetch.return_value = [sample_outage]
+        archiver.archive.return_value = None
+
+        with caplog.at_level(logging.INFO):
+            assert main() == 0
+
+        assert _read_state(state_file)["outages"][sample_outage.id]["archives"] == []
+        summaries = [r for r in caplog.records if r.getMessage().startswith("魚拓を")]
+        assert [(r.levelno, r.getMessage()) for r in summaries] == [
+            (logging.WARNING, "魚拓を 0 件取得、1 件失敗")
+        ]
+
+    def test_success_is_logged_and_summarized_as_info(
+        self, mocker, state_file, fetch, allow_sending, archiver, sample_outage, caplog
+    ):
+        """魚拓に成功した件は説明と URL を INFO に出し、失敗が無ければサマリも INFO であること"""
+        mocker.patch("src.notifier.DRY_RUN", True)
+        fetch.return_value = [sample_outage]
+        archiver.archive.side_effect = _archived
+
+        with caplog.at_level(logging.INFO):
+            assert main() == 0
+
+        messages = [
+            (r.levelno, r.getMessage())
+            for r in caplog.records
+            if r.getMessage().startswith("魚拓を")
+        ]
+        assert messages == [
+            (
+                logging.INFO,
+                f"魚拓を取得しました: {sample_outage.title} -> "
+                f"{_archived(sample_outage.url)}",
+            ),
+            (logging.INFO, "魚拓を 1 件取得、0 件失敗"),
+        ]
+
+    def test_missing_credentials_warn_once_and_skip(
+        self, mocker, state_file, fetch, allow_sending, sample_outage, caplog
+    ):
+        """認証情報なし（本物の archiver）では警告 1 回・終了コード 0 で、
+        サマリも記録も出ないこと"""
+        mocker.patch("src.notifier.DRY_RUN", True)
+        # autouse のモックより後に本物のクラスに戻す（conftest が認証情報を削除済み）
+        mocker.patch("src.main.WaybackArchiver", WaybackArchiver)
+        fetch.return_value = [sample_outage]
+
+        with caplog.at_level(logging.INFO):
+            assert main() == 0
+
+        warnings = [
+            r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING
+        ]
+        assert len(warnings) == 1
+        assert "認証情報が未設定" in warnings[0]
+        assert not any(r.getMessage().startswith("魚拓を") for r in caplog.records)
+        stored = _read_state(state_file)["outages"][sample_outage.id]
+        assert stored["notified_statuses"] == [""]
+        assert stored["archives"] == []
+
+    def test_dry_run_skips_archiving_without_warning(
+        self, mocker, state_file, fetch, allow_sending, archiver, sample_outage, caplog
+    ):
+        """DRY RUN では各件の archive() は呼ぶ（対象 URL のログは archiver が出す）が、
+        None を失敗として数えず WARNING のサマリも出さないこと"""
+        mocker.patch("src.notifier.DRY_RUN", True)
+        mocker.patch("src.main.DRY_RUN", True)
+        fetch.return_value = [sample_outage]
+        archiver.archive.return_value = None
+
+        with caplog.at_level(logging.INFO):
+            assert main() == 0
+
+        archiver.archive.assert_called_once_with(sample_outage.url)
+        assert [
+            r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING
+        ] == []
+        assert not any(r.getMessage().startswith("魚拓を") for r in caplog.records)
+        assert any(
+            "[DRY RUN]" in r.getMessage() and "魚拓" in r.getMessage()
+            for r in caplog.records
+            if r.name == "src.main"
+        )
+        state = _read_state(state_file)
+        stored = state["outages"][sample_outage.id]
+        assert stored["archives"] == []
+        assert stored["notified_statuses"] == [""]
+        assert state["stats"]["total_notifications_this_month"] == 1
+
+    def test_tweet_text_never_contains_archive_url(
+        self, mocker, state_file, fetch, allow_sending, archiver, sample_outage
+    ):
+        """魚拓の URL はツイート本文に含めないこと"""
+        fetch.return_value = [sample_outage]
+        post = mocker.patch("src.main.XNotifier._post_tweet", return_value=True)
+        archiver.archive.side_effect = _archived
+
+        assert main() == 0
+
+        post.assert_called_once()
+        message = post.call_args.args[0]
+        assert sample_outage.url in message
+        assert "web.archive.org" not in message
+
+    def test_archiver_is_not_created_without_changes(
+        self, mocker, fetch, archiver_class, sample_outage
+    ):
+        """変更が無い実行では archiver を生成しないこと（未設定の警告を毎回出さないため）"""
+        fetch.return_value = [sample_outage]
+        mocker.patch(
+            "src.main.StateManager.get_changes",
+            return_value=ChangeResult(new_outages=[], status_changes=[]),
+        )
+
+        assert main() == 0
+
+        archiver_class.assert_not_called()
+
+    def test_archiver_is_not_created_when_all_notifications_fail(
+        self, mocker, fetch, allow_sending, archiver_class, sample_outage
+    ):
+        """全件が通知失敗の実行では魚拓の対象が無いので archiver を生成しないこと"""
+        fetch.return_value = [sample_outage]
+        mocker.patch("src.main.XNotifier.notify_new_outage", return_value=False)
+
+        assert main() == 1
+
+        archiver_class.assert_not_called()

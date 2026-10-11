@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Literal
 
-from .config import LOG_LEVEL, STATE_FILE_PATH
+from .archiver import WaybackArchiver
+from .config import DRY_RUN, LOG_LEVEL, STATE_FILE_PATH
 from .notifier import XNotifier, can_send_notification, should_notify_change
 from .scraper import (
     ToshimaScraper,
@@ -45,6 +46,7 @@ class _PendingNotification:
     notify: Callable[[], bool]  # 引数なしで呼べる投稿関数（partial で束縛済み）
     outage_id: str  # 通知済みマーク対象の障害ID
     status: str  # 通知済みマーク対象のステータス
+    url: str  # 魚拓の対象（詳細ページ URL。通知本文の「詳細:」行と同じ）
     label: str  # ログ用の種別名（「新規障害」「ステータス変更」）
     description: str  # ログ用の対象の説明（タイトル、旧→新ステータスなど）
 
@@ -60,6 +62,7 @@ def _pending_notifications(
             notify=partial(notifier.notify_new_outage, outage),
             outage_id=outage.id,
             status=outage.status,
+            url=outage.url,
             label="新規障害",
             description=outage.title,
         )
@@ -71,6 +74,7 @@ def _pending_notifications(
             notify=partial(notifier.notify_status_change, change),
             outage_id=change.outage.id,
             status=change.new_status,
+            url=change.outage.url,
             label="ステータス変更",
             description=f"{change.outage.title} ({change.describe()})",
         )
@@ -122,6 +126,68 @@ def _process_notification(
     state_manager.mark_notified(outage_id, status)
     state_manager.increment_notification_count()
     return "sent"
+
+
+def _archive_outages(
+    state_manager: StateManager, targets: list[_PendingNotification]
+) -> tuple[int, int]:
+    """対象の詳細ページの魚拓を順に取り、成功した件だけ状態に記録する
+
+    魚拓はベストエフォート。archiver の生成から各件の取得までを例外捕捉で包み、
+    予期しない例外もログに残して次の件へ進む（通知の成否・終了コード・状態保存に
+    影響させない）。失敗した件は記録せず、以降の実行でも再試行しない。
+
+    Args:
+        state_manager: 状態マネージャ（成功した件の記録先）
+        targets: 通知結果が「送信」または「スキップ」だった作業単位
+
+    Returns:
+        (成功件数, 失敗件数)。対象が無い・archiver が無効（認証情報なし）・DRY RUN なら (0, 0)
+    """
+    if not targets:
+        # 対象が無ければ archiver を生成しない（認証情報なしの警告を毎回出さないため）
+        return 0, 0
+
+    success_count = 0
+    failure_count = 0
+    try:
+        with WaybackArchiver() as archiver:
+            if not archiver.enabled:
+                # 認証情報なしの警告は生成時に 1 回出ている。試行 0 件として扱い、
+                # 件数サマリは出さない
+                return 0, 0
+            for item in targets:
+                try:
+                    archived_url = archiver.archive(item.url)
+                except Exception:
+                    # archive() は例外を出さない契約だが、万一抜けてきても
+                    # この件だけ失敗にして次の件へ進む
+                    logger.exception(
+                        f"魚拓の取得で予期しない例外が発生しました: {item.description}"
+                    )
+                    archived_url = None
+                if DRY_RUN:
+                    # DRY RUN では archive() が要求を送らず対象 URL を INFO に出して None を
+                    # 返す。失敗時も None なので戻り値では区別できず、ここで DRY RUN を見て
+                    # 記録も計数もしない。各件の archive() は対象 URL のログのために呼ぶ
+                    continue
+                if archived_url is None:
+                    # 失敗の理由は archiver 側が WARNING に出している
+                    failure_count += 1
+                    continue
+                state_manager.record_archive(item.outage_id, item.status, archived_url)
+                success_count += 1
+                logger.info(f"魚拓を取得しました: {item.description} -> {archived_url}")
+            if DRY_RUN:
+                # 試行 0 件として扱い、WARNING の件数サマリは出さない
+                logger.info(f"[DRY RUN] 魚拓の取得を {len(targets)} 件スキップしました")
+                return 0, 0
+    except Exception:
+        # archiver の生成やセッションの後始末で例外が出た場合。まだ成功していない件を
+        # すべて失敗として数える
+        logger.exception("魚拓の処理で予期しない例外が発生しました")
+        failure_count = len(targets) - success_count
+    return success_count, failure_count
 
 
 def main() -> int:
@@ -201,6 +267,9 @@ def main() -> int:
         sent_count = 0
         skipped_count = 0
         failed_outage_ids: list[str] = []
+        # 魚拓の対象（通知結果が「送信」または「スキップ」の件）。ループ中は通知だけを
+        # 行い、魚拓はすべての通知が終わってからまとめて取る（下記 7 を参照）
+        archive_targets: list[_PendingNotification] = []
 
         for item in _pending_notifications(changes, XNotifier()):
             result = _process_notification(
@@ -218,6 +287,8 @@ def main() -> int:
                 logger.error(f"{item.label}の通知に失敗しました: {item.description}")
             else:
                 skipped_count += 1
+            if result != "failed":
+                archive_targets.append(item)
 
         if skipped_count:
             # 月間上限や 90% 到達時の絞り込みで意図的に送らなかった件数をまとめて警告する
@@ -233,11 +304,33 @@ def main() -> int:
         if failed_outage_ids:
             state_manager.rollback_outages(failed_outage_ids, snapshot)
 
-        # 7. 状態保存（保存・スキップのログは save_state() 側で出す）
+        # 7. 詳細ページの魚拓を取る
+        # 順序は「通知ループ → 巻き戻し → 魚拓 → 保存」。
+        # - 通知の後に回すのは速報性のため: 魚拓は 1 件あたり最大 WAYBACK_TIMEOUT 秒
+        #   かかるので、通知の前や合間に挟むとツイートがその分遅れる
+        # - 「失敗」の件を対象にしないのは、巻き戻しで state から外れて次回実行で
+        #   再検出されるため（そのときに取る）。巻き戻しと魚拓の順序を入れ替えても
+        #   記録が巻き戻しで消えることはないが、記録を追記してから保存する流れを
+        #   読みやすくするため巻き戻しの後に置く
+        # - 魚拓の結果は終了コード・通知済みマーク・月間カウンタ・failed_outage_ids に
+        #   反映しない（ベストエフォート）
+        archived_count, archive_failed_count = _archive_outages(
+            state_manager, archive_targets
+        )
+        if archived_count or archive_failed_count:
+            archive_summary = (
+                f"魚拓を {archived_count} 件取得、{archive_failed_count} 件失敗"
+            )
+            if archive_failed_count:
+                logger.warning(archive_summary)
+            else:
+                logger.info(archive_summary)
+
+        # 8. 状態保存（保存・スキップのログは save_state() 側で出す）
         logger.info("状態を保存しています...")
         state_manager.save_state()
 
-        # 8. 通知失敗があればエラー終了する
+        # 9. 通知失敗があればエラー終了する
         # GitHub Actions のジョブが失敗するため、サイレントな取りこぼしを防ぐ。
         # 状態はすでに保存済みで、ワークフローは終了コード 1 でもコミットする。
         if failed_outage_ids:
