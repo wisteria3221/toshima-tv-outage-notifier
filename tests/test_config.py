@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from src import config
+
 PROJECT_ROOT = Path(__file__).parent.parent
 
 
@@ -42,3 +44,35 @@ class TestDotenvLoading:
         )
 
         assert result.stdout.strip() == "True True DEBUG"
+
+
+class TestGetWaybackCredentials:
+    """get_wayback_credentials() のテスト"""
+
+    def test_reads_from_environment(self, monkeypatch):
+        """環境変数に設定した値を (アクセスキー, シークレットキー) の順で返すこと"""
+        monkeypatch.setenv("WAYBACK_ACCESS_KEY", "test-access-key")
+        monkeypatch.setenv("WAYBACK_SECRET_KEY", "test-secret-key")
+
+        assert config.get_wayback_credentials() == (
+            "test-access-key",
+            "test-secret-key",
+        )
+
+    def test_returns_empty_strings_when_unset(self, monkeypatch):
+        """未設定なら空文字の組を返すこと（ローカルの .env の値に依存しない）"""
+        monkeypatch.delenv("WAYBACK_ACCESS_KEY", raising=False)
+        monkeypatch.delenv("WAYBACK_SECRET_KEY", raising=False)
+
+        assert config.get_wayback_credentials() == ("", "")
+
+    def test_reads_at_call_time(self, monkeypatch):
+        """import 時ではなく呼び出し時に環境変数を読むこと（テストで差し替え可能）"""
+        monkeypatch.setenv("WAYBACK_ACCESS_KEY", "first")
+        monkeypatch.setenv("WAYBACK_SECRET_KEY", "first-secret")
+        first = config.get_wayback_credentials()
+        monkeypatch.setenv("WAYBACK_ACCESS_KEY", "second")
+        monkeypatch.setenv("WAYBACK_SECRET_KEY", "second-secret")
+
+        assert first == ("first", "first-secret")
+        assert config.get_wayback_credentials() == ("second", "second-secret")
