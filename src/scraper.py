@@ -3,8 +3,7 @@
 import logging
 import re
 import time
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass
 from urllib.parse import urljoin
 
 import requests
@@ -29,6 +28,10 @@ logger = logging.getLogger(__name__)
 # 後から「（復旧）」が付いたときにステータス変更として扱われて地域情報が消える。
 _AREA_KEYWORDS = "丁目|付近|地区|町|番地|区|市|全域|駅"
 
+# 全角・半角どちらの括弧も受け付ける文字クラス（ステータス・地域の抽出と除去で共有）
+_OPEN_BRACKET = "[（(]"
+_CLOSE_BRACKET = "[）)]"
+
 # 詳細リンク判定とID抽出を兼ねる定数（キャプチャグループ付き）。
 # find_all(href=...) は re.search 意味で照合するため、グループ追加は照合結果を変えない。
 _RE_DETAIL_ID = re.compile(r"/trouble/detail/(\d+)")
@@ -39,13 +42,17 @@ _RE_DATE = re.compile(r"(\d{4}\.\d{2}\.\d{2})")
 # ステータス抽出（テキスト先頭の日付直後に続く括弧内テキストのみ）
 # 先頭に固定しないと、タイトル途中の括弧（例「サービス停波（STB）について」）を
 # ステータスとして誤認する。実サイトではステータスは常に日付直後に置かれている。
-_RE_STATUS = re.compile(r"^\s*(?:\d{4}\.\d{2}\.\d{2})?\s*[（(]([^）)]+)[）)]")
+_RE_STATUS = re.compile(
+    rf"^\s*(?:\d{{4}}\.\d{{2}}\.\d{{2}})?\s*{_OPEN_BRACKET}([^）)]+){_CLOSE_BRACKET}"
+)
 
 # ステータスが地域情報でないことを確認する否定判定用
 _RE_AREA_KEYWORD = re.compile(_AREA_KEYWORDS)
 
 # 地域抽出（括弧内で地域キーワードを含むもの）
-_RE_AREA_IN_BRACKETS = re.compile(rf"[（(]([^）)]*(?:{_AREA_KEYWORDS})[^）)]*)[）)]")
+_RE_AREA_IN_BRACKETS = re.compile(
+    rf"{_OPEN_BRACKET}([^）)]*(?:{_AREA_KEYWORDS})[^）)]*){_CLOSE_BRACKET}"
+)
 
 # 4xx のうち一時的な要因とみなしてリトライする応答コード。
 # 408 Request Timeout / 429 Too Many Requests はリトライで解消しうるため、
@@ -81,8 +88,13 @@ class OutageInfo:
     title: str  # 障害タイトル
     area: str  # 影響地域
     url: str  # 詳細ページURL
-    # 保存時刻は state_manager 側で付与する。ここでは生成時刻を参考値として持つだけ
-    last_updated: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+
+def _remove_bracketed(text: str, inner: str) -> str:
+    """括弧込みの「（inner）」を最初の 1 回だけ取り除く"""
+    return re.sub(
+        rf"{_OPEN_BRACKET}{re.escape(inner)}{_CLOSE_BRACKET}", "", text, count=1
+    )
 
 
 class ToshimaScraper:
@@ -126,26 +138,25 @@ class ToshimaScraper:
                 else f"{TOSHIMA_TROUBLE_URL}page/{page}/"
             )
 
-            if page == 1:
-                # 1 ページ目すら取れない = 上流サイトに到達できない状態。
-                # 空リスト（= パース結果が空）とは区別するため例外で通知する。
-                # 4xx（UpstreamRejectedError）はそのまま呼び出し側へ伝える。
+            # 1 ページ目すら取れない = 上流サイトに到達できない状態。
+            # 空リスト（= パース結果が空）とは区別するため例外で通知し、
+            # 4xx（UpstreamRejectedError）もそのまま呼び出し側へ伝える。
+            # 2 ページ目以降は「ページが存在しない」404 が正常系としてありうるので、
+            # 4xx も不通も取得済みの結果を返して打ち切る（実行全体は失敗にしない）。
+            try:
                 html = self._fetch_with_retry(url)
-                if html is None:
+            except UpstreamRejectedError as e:
+                if page == 1:
+                    raise
+                logger.warning(f"ページ {page} が拒否されたため打ち切ります: {e}")
+                break
+            if html is None:
+                if page == 1:
                     raise UpstreamUnavailableError(
                         f"障害情報ページを取得できません: {url}"
                     )
-            else:
-                # 2 ページ目以降は「ページが存在しない」404 が正常系としてありうるので、
-                # 4xx も不通も取得済みの結果を返して打ち切る（実行全体は失敗にしない）。
-                try:
-                    html = self._fetch_with_retry(url)
-                except UpstreamRejectedError as e:
-                    logger.warning(f"ページ {page} が拒否されたため打ち切ります: {e}")
-                    break
-                if html is None:
-                    logger.warning(f"ページ {page} の取得に失敗しました")
-                    break
+                logger.warning(f"ページ {page} の取得に失敗しました")
+                break
 
             outages = self._parse_list_page(html)
             if not outages:
@@ -266,10 +277,10 @@ class ToshimaScraper:
         href = link_element.get("href", "")
         text = link_element.get_text(strip=True)
 
-        if not href or not text:
+        if not text:
             return None
 
-        # IDを抽出
+        # IDを抽出（href が空なら照合に失敗して None になる）
         id_match = _RE_DETAIL_ID.search(href)
         if not id_match:
             return None
@@ -343,9 +354,7 @@ class ToshimaScraper:
 
         if status:
             # ステータス部分（括弧込み）を除去
-            clean_text = re.sub(
-                rf"[（(]{re.escape(status)}[）)]", "", clean_text, count=1
-            )
+            clean_text = _remove_bracketed(clean_text, status)
 
         clean_text = clean_text.strip()
 
@@ -356,7 +365,7 @@ class ToshimaScraper:
         # タイトルを抽出（地域情報を除去）
         title = clean_text
         if area:
-            title = re.sub(rf"[（(]{re.escape(area)}[）)]", "", title, count=1)
+            title = _remove_bracketed(title, area)
 
         title = title.strip()
 

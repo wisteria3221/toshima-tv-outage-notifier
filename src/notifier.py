@@ -6,14 +6,9 @@ import re
 import requests
 import tweepy
 
-from .config import (
-    DRY_RUN,
-    MONTHLY_TWEET_LIMIT,
-    get_x_credentials,
-    validate_x_credentials,
-)
+from .config import DRY_RUN, MONTHLY_TWEET_LIMIT, get_x_credentials
 from .scraper import OutageInfo
-from .state_manager import StateManager, StatusChange
+from .state_manager import StateManager, StatusChange, display_status
 
 logger = logging.getLogger(__name__)
 
@@ -100,19 +95,13 @@ class XNotifier:
         Returns:
             tweepy.Client または None（認証情報不足時）
         """
-        if not validate_x_credentials():
+        creds = get_x_credentials()
+        if not all(creds.values()):
             logger.error("X API認証情報が設定されていません")
             return None
 
-        creds = get_x_credentials()
-
         try:
-            client = tweepy.Client(
-                consumer_key=creds["consumer_key"],
-                consumer_secret=creds["consumer_secret"],
-                access_token=creds["access_token"],
-                access_token_secret=creds["access_token_secret"],
-            )
+            client = tweepy.Client(**creds)
             logger.info("X APIクライアントを初期化しました")
             return client
 
@@ -147,37 +136,28 @@ class XNotifier:
     def _format_new_outage_message(self, outage: OutageInfo) -> str:
         """新規障害用メッセージをフォーマット
 
+        初めて検出した時点で既にステータスが付いている障害（30 分の間に発生と復旧が
+        済んだもの、状態ファイル初期化後の過去エントリなど）は、そのステータスを
+        反映して通知する。進行中として通知すると、その後の復旧通知が出ないまま
+        （検出時のステータスが通知済みになるため）利用者に誤った状況が伝わる。
+
         Args:
             outage: 障害情報
 
         Returns:
             フォーマットされたメッセージ
         """
-        # 初めて検出した時点で既にステータスが付いている障害（30 分の間に発生と復旧が
-        # 済んだもの、状態ファイル初期化後の過去エントリなど）は、そのステータスを
-        # 反映して通知する。進行中として通知すると、その後の復旧通知が出ないまま
-        # （検出時のステータスが通知済みになるため）利用者に誤った状況が伝わる。
-        header, title_line_format = self._header_and_title_format(
+        return self._format_message(
+            outage,
             status=outage.status,
             default_header="【としまテレビ 障害情報】",
-        )
-
-        fixed_lines = []
-        if outage.date:
-            fixed_lines.append(f"日時: {outage.date}")
-        if outage.area:
-            fixed_lines.append(f"地域: {outage.area}")
-        fixed_lines.append(f"詳細: {outage.url}")
-
-        return self._compose_message(
-            header=header,
-            title=outage.title,
-            title_line_format=title_line_format,
-            fixed_lines=fixed_lines,
+            include_date=True,
         )
 
     def _format_status_change_message(self, change: StatusChange) -> str:
         """ステータス変更用メッセージをフォーマット
+
+        括弧なし（進行中）へ戻った場合もステータス変更として「進行中」と明示する。
 
         Args:
             change: ステータス変更情報
@@ -185,15 +165,38 @@ class XNotifier:
         Returns:
             フォーマットされたメッセージ
         """
-        outage = change.outage
-
-        # 括弧なし（進行中）へ戻った場合もステータス変更として明示する
-        header, title_line_format = self._header_and_title_format(
-            status=change.new_status or "進行中",
+        return self._format_message(
+            change.outage,
+            status=display_status(change.new_status),
             default_header="【としまテレビ 障害情報更新】",
+            include_date=False,
+        )
+
+    def _format_message(
+        self,
+        outage: OutageInfo,
+        status: str,
+        default_header: str,
+        include_date: bool,
+    ) -> str:
+        """ヘッダー・タイトル行・固定行（日時・地域・URL）からメッセージを組み立てる
+
+        Args:
+            outage: 障害情報
+            status: ヘッダーとタイトル行の決定に使うステータス
+            default_header: 解決系ステータス以外で使うヘッダー
+            include_date: 「日時:」行を含めるか（新規障害のみ）
+
+        Returns:
+            フォーマットされたメッセージ
+        """
+        header, title_line_format = self._header_and_title_format(
+            status=status, default_header=default_header
         )
 
         fixed_lines = []
+        if include_date and outage.date:
+            fixed_lines.append(f"日時: {outage.date}")
         if outage.area:
             fixed_lines.append(f"地域: {outage.area}")
         fixed_lines.append(f"詳細: {outage.url}")

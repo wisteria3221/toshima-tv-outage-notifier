@@ -103,7 +103,7 @@ npx cc-sdd@latest --claude-skills --lang ja
 
 **`OutageInfo` データクラス** ([src/scraper.py](src/scraper.py))
 - 1件の障害を表すコアデータ構造
-- フィールド: `id`, `date`, `status`, `title`, `area`, `url`, `last_updated`
+- フィールド: `id`, `date`, `status`, `title`, `area`, `url`（保存時刻は state_manager 側で付与する）
 - `status` の値: 日付直後の括弧内テキストがそのまま入る（`""` = 括弧なし = 進行中）。典型値は `"終了"`, `"復旧"`, `"完了"`, `"仮復旧"`, `"調査中"` だが固定の列挙ではなく、メンテナンス告知では `"2026年3月12日"` のような予定日が入った実例もある。固定値を前提にした分岐を書かないこと
 
 **状態ファイルフォーマット** ([data/state.json](data/state.json))

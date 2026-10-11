@@ -3,6 +3,7 @@
 import logging
 import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import partial
 from typing import Literal
 
@@ -13,15 +14,15 @@ from .scraper import (
     UpstreamRejectedError,
     UpstreamUnavailableError,
 )
-from .state_manager import StateFileError, StateManager
+from .state_manager import ChangeResult, StateFileError, StateManager
 
 # 終了コード
 # GitHub Actions 側でこの値を見て扱いを変える（check-outage.yml を参照）。
 EXIT_SUCCESS = 0
-EXIT_FAILURE = (
-    1  # 通知失敗・予期しない例外など、気づくべき失敗（状態は保存済みの場合がある）
-)
-EXIT_UPSTREAM_UNAVAILABLE = 2  # 上流サイトに到達できない（一時的、次回実行で再試行）
+# 通知失敗・予期しない例外など、気づくべき失敗（状態は保存済みの場合がある）
+EXIT_FAILURE = 1
+# 上流サイトに到達できない（一時的、次回実行で再試行）
+EXIT_UPSTREAM_UNAVAILABLE = 2
 
 # ロギング設定
 logging.basicConfig(
@@ -30,6 +31,52 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _PendingNotification:
+    """通知ループで 1 件ずつ処理する通知の作業単位
+
+    新規障害とステータス変更は投稿関数と通知済みマークの引数が異なるだけなので、
+    ここで同じ形に揃えてループを 1 本にする。
+    """
+
+    change_type: str  # "new" または "status_change"
+    notify: Callable[[], bool]  # 引数なしで呼べる投稿関数（partial で束縛済み）
+    outage_id: str  # 通知済みマーク対象の障害ID
+    status: str  # 通知済みマーク対象のステータス
+    label: str  # ログ用の種別名（「新規障害」「ステータス変更」）
+    description: str  # ログ用の対象の説明（タイトル、旧→新ステータスなど）
+
+
+def _pending_notifications(
+    changes: ChangeResult, notifier: XNotifier
+) -> list[_PendingNotification]:
+    """差分検出結果を通知の作業単位に揃える（新規障害 → ステータス変更の順）"""
+    # partial で投稿関数を束縛（ラムダの遅延束縛を避ける）
+    pending = [
+        _PendingNotification(
+            change_type="new",
+            notify=partial(notifier.notify_new_outage, outage),
+            outage_id=outage.id,
+            status=outage.status,
+            label="新規障害",
+            description=outage.title,
+        )
+        for outage in changes.new_outages
+    ]
+    pending.extend(
+        _PendingNotification(
+            change_type="status_change",
+            notify=partial(notifier.notify_status_change, change),
+            outage_id=change.outage.id,
+            status=change.new_status,
+            label="ステータス変更",
+            description=f"{change.outage.title} ({change.describe()})",
+        )
+        for change in changes.status_changes
+    )
+    return pending
 
 
 def _process_notification(
@@ -58,9 +105,9 @@ def _process_notification(
     # （"skipped"）、投稿が失敗した場合は "failed" として呼び出し側でエラー扱いする。
     # 1 回の実行で複数件送るとその間にカウンタが進むため、月間上限は 1 件ごとに
     # 判定して上限を超えないようにする。
-    if not can_send_notification(state_manager):
-        return "skipped"
-    if not should_notify_change(state_manager, change_type):
+    if not can_send_notification(state_manager) or not should_notify_change(
+        state_manager, change_type
+    ):
         return "skipped"
     # tweepy は接続エラーやタイムアウトを TweepyException に包まず requests の例外のまま
     # 投げる。ここで捕捉せずに main() の外側まで抜けると状態が保存されず、同じ実行で
@@ -151,52 +198,24 @@ def main() -> int:
         # 早期終了は、結果が件ごとのスキップと同じ（state 更新・保存・終了コード 0）で
         # ログだけが異なり、スキップの意味を変えるときに 2 箇所直す必要があるため置かない。
         logger.info("通知を送信しています...")
-        notifier = XNotifier()
-        notification_sent = False
+        sent_count = 0
         skipped_count = 0
         failed_outage_ids: list[str] = []
 
-        # 新規障害の通知
-        for outage in changes.new_outages:
-            # partial で投稿関数を束縛（ラムダの遅延束縛を避ける）
+        for item in _pending_notifications(changes, XNotifier()):
             result = _process_notification(
                 state_manager,
-                "new",
-                partial(notifier.notify_new_outage, outage),
-                outage.id,
-                outage.status,
+                item.change_type,
+                item.notify,
+                item.outage_id,
+                item.status,
             )
             if result == "sent":
-                notification_sent = True
-                logger.info(f"新規障害を通知しました: {outage.title}")
+                sent_count += 1
+                logger.info(f"{item.label}を通知しました: {item.description}")
             elif result == "failed":
-                failed_outage_ids.append(outage.id)
-                logger.error(f"新規障害の通知に失敗しました: {outage.title}")
-            else:
-                skipped_count += 1
-
-        # ステータス変更の通知
-        for change in changes.status_changes:
-            # partial で投稿関数を束縛（ラムダの遅延束縛を避ける）
-            result = _process_notification(
-                state_manager,
-                "status_change",
-                partial(notifier.notify_status_change, change),
-                change.outage.id,
-                change.new_status,
-            )
-            if result == "sent":
-                notification_sent = True
-                logger.info(
-                    f"ステータス変更を通知しました: {change.outage.title} "
-                    f"({change.old_status or '進行中'} -> {change.new_status or '進行中'})"
-                )
-            elif result == "failed":
-                failed_outage_ids.append(change.outage.id)
-                logger.error(
-                    f"ステータス変更の通知に失敗しました: {change.outage.title} "
-                    f"({change.old_status or '進行中'} -> {change.new_status or '進行中'})"
-                )
+                failed_outage_ids.append(item.outage_id)
+                logger.error(f"{item.label}の通知に失敗しました: {item.description}")
             else:
                 skipped_count += 1
 
@@ -214,14 +233,9 @@ def main() -> int:
         if failed_outage_ids:
             state_manager.rollback_outages(failed_outage_ids, snapshot)
 
-        # 7. 状態保存
+        # 7. 状態保存（保存・スキップのログは save_state() 側で出す）
         logger.info("状態を保存しています...")
-        saved = state_manager.save_state()
-
-        if saved:
-            logger.info("状態ファイルを保存しました")
-        else:
-            logger.info("状態に変更がないため保存をスキップしました")
+        state_manager.save_state()
 
         # 8. 通知失敗があればエラー終了する
         # GitHub Actions のジョブが失敗するため、サイレントな取りこぼしを防ぐ。
@@ -232,11 +246,9 @@ def main() -> int:
             )
             return EXIT_FAILURE
 
-        if notification_sent:
-            logger.info("通知処理が完了しました")
-        else:
-            logger.info("通知は送信されませんでした（条件未達成）")
-
+        logger.info(
+            f"通知処理が完了しました（送信 {sent_count} 件、スキップ {skipped_count} 件）"
+        )
         return EXIT_SUCCESS
 
     except Exception as e:

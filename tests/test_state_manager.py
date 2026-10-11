@@ -1,8 +1,10 @@
 """状態管理のテスト"""
 
+from dataclasses import replace
+from datetime import UTC, datetime
+
 import pytest
 
-from src.scraper import OutageInfo
 from src.state_manager import (
     ChangeResult,
     StateFileError,
@@ -12,16 +14,9 @@ from src.state_manager import (
 
 
 @pytest.fixture
-def sample_outage_with_status():
-    """ステータス付きの障害情報"""
-    return OutageInfo(
-        id="100",
-        date="2025.12.20",
-        status="復旧",
-        title="テスト障害",
-        area="池袋",
-        url="https://www.toshima.co.jp/trouble/detail/100",
-    )
+def sample_outage_with_status(sample_outage):
+    """ステータス付き（復旧）の障害情報"""
+    return replace(sample_outage, status="復旧")
 
 
 class TestStateManager:
@@ -105,7 +100,7 @@ class TestSaveState:
         assert list(temp_state_file.parent.iterdir()) == [temp_state_file]
 
     def test_failed_write_keeps_original_file_intact(
-        self, temp_state_file, sample_outage, mocker
+        self, temp_state_file, sample_outage, make_outage, mocker
     ):
         """書き込み途中で失敗しても元のファイルが壊れず、一時ファイルも残らないこと
 
@@ -117,14 +112,7 @@ class TestSaveState:
         manager.save_state()
         original = temp_state_file.read_text(encoding="utf-8")
 
-        other = OutageInfo(
-            id="200",
-            date="2025.12.21",
-            status="",
-            title="別の障害",
-            area="",
-            url="https://www.toshima.co.jp/trouble/detail/200",
-        )
+        other = make_outage("200", date="2025.12.21", title="別の障害", area="")
         manager.update_outages([sample_outage, other])
 
         def broken_dump(obj, fp, **kwargs):
@@ -240,36 +228,20 @@ class TestDirtyFlag:
         manager = StateManager(temp_state_file)
         assert not manager.is_dirty()
 
-    def test_dirty_flag_after_new_outage(self, temp_state_file):
+    def test_dirty_flag_after_new_outage(self, temp_state_file, sample_outage):
         """新規障害追加後はdirtyフラグがTrue"""
         manager = StateManager(temp_state_file)
 
-        outage = OutageInfo(
-            id="1",
-            date="2025.12.20",
-            status="",
-            title="テスト障害",
-            area="池袋",
-            url="https://example.com/1",
-        )
-
-        manager.update_outages([outage])
+        manager.update_outages([sample_outage])
         assert manager.is_dirty()
 
-    def test_dirty_flag_after_status_change(self, temp_state_file):
+    def test_dirty_flag_after_status_change(
+        self, temp_state_file, sample_outage, sample_outage_with_status
+    ):
         """ステータス変更後はdirtyフラグがTrue"""
         # 既存障害を準備
         manager = StateManager(temp_state_file)
-
-        outage1 = OutageInfo(
-            id="1",
-            date="2025.12.20",
-            status="",
-            title="Test",
-            area="",
-            url="https://example.com/1",
-        )
-        manager.update_outages([outage1])
+        manager.update_outages([sample_outage])
         manager.save_state()
 
         # 新しいStateManagerで読み込み（dirty=Falseにリセット）
@@ -277,30 +249,15 @@ class TestDirtyFlag:
         assert not manager2.is_dirty()
 
         # ステータス変更
-        outage2 = OutageInfo(
-            id="1",
-            date="2025.12.20",
-            status="復旧",
-            title="Test",
-            area="",
-            url="https://example.com/1",
-        )
-        manager2.update_outages([outage2])
+        manager2.update_outages([sample_outage_with_status])
         assert manager2.is_dirty()
 
-    def test_no_dirty_flag_for_identical_update(self, temp_state_file):
+    def test_no_dirty_flag_for_identical_update(
+        self, temp_state_file, sample_outage_with_status
+    ):
         """同一データでの更新ではdirtyフラグが立たない"""
         manager = StateManager(temp_state_file)
-
-        outage = OutageInfo(
-            id="1",
-            date="2025.12.20",
-            status="復旧",
-            title="Test",
-            area="池袋",
-            url="https://example.com/1",
-        )
-        manager.update_outages([outage])
+        manager.update_outages([sample_outage_with_status])
         manager.save_state()
 
         # 再読み込み
@@ -308,7 +265,7 @@ class TestDirtyFlag:
         assert not manager2.is_dirty()
 
         # 同一データで更新
-        manager2.update_outages([outage])
+        manager2.update_outages([sample_outage_with_status])
         assert not manager2.is_dirty()
 
     def test_save_state_only_when_dirty(self, temp_state_file):
@@ -330,37 +287,21 @@ class TestDirtyFlag:
         assert not manager.is_dirty()
         assert manager.save_state(force=True)
 
-    def test_dirty_flag_reset_after_save(self, temp_state_file):
+    def test_dirty_flag_reset_after_save(self, temp_state_file, sample_outage):
         """保存後はdirtyフラグがクリアされる"""
         manager = StateManager(temp_state_file)
-
-        outage = OutageInfo(
-            id="1",
-            date="2025.12.20",
-            status="",
-            title="Test",
-            area="",
-            url="https://example.com/1",
-        )
-        manager.update_outages([outage])
+        manager.update_outages([sample_outage])
         assert manager.is_dirty()
 
         manager.save_state()
         assert not manager.is_dirty()
 
-    def test_mark_notified_marks_dirty(self, temp_state_file):
+    def test_mark_notified_marks_dirty(
+        self, temp_state_file, sample_outage_with_status
+    ):
         """mark_notified()でdirtyフラグが立つ"""
         manager = StateManager(temp_state_file)
-
-        outage = OutageInfo(
-            id="1",
-            date="2025.12.20",
-            status="復旧",
-            title="Test",
-            area="",
-            url="https://example.com/1",
-        )
-        manager.update_outages([outage])
+        manager.update_outages([sample_outage_with_status])
         manager.save_state()
 
         # 再読み込み
@@ -368,7 +309,7 @@ class TestDirtyFlag:
         assert not manager2.is_dirty()
 
         # 通知マーク
-        manager2.mark_notified("1", "復旧")
+        manager2.mark_notified(sample_outage_with_status.id, "復旧")
         assert manager2.is_dirty()
 
     def test_increment_notification_count_marks_dirty(self, temp_state_file):
@@ -386,8 +327,6 @@ class TestDirtyFlag:
 
     def test_month_rollover_marks_dirty(self, temp_state_file):
         """月が変わるとdirtyフラグが立つ"""
-        from datetime import UTC, datetime
-
         manager = StateManager(temp_state_file)
 
         # 現在月と必ず異なる過去の月を設定する
@@ -437,15 +376,7 @@ class TestRollbackOutages:
         manager.mark_notified(sample_outage.id, "")
         snapshot = manager.snapshot_outages()
 
-        resolved = OutageInfo(
-            id=sample_outage.id,
-            date=sample_outage.date,
-            status="復旧",
-            title=sample_outage.title,
-            area=sample_outage.area,
-            url=sample_outage.url,
-        )
-        manager.update_outages([resolved])
+        manager.update_outages([replace(sample_outage, status="復旧")])
         manager.mark_notified(sample_outage.id, "復旧")
 
         manager.rollback_outages([sample_outage.id], snapshot)
@@ -454,18 +385,13 @@ class TestRollbackOutages:
         assert stored["status"] == ""
         assert stored["notified_statuses"] == [""]
 
-    def test_other_outages_are_untouched(self, temp_state_file, sample_outage):
+    def test_other_outages_are_untouched(
+        self, temp_state_file, sample_outage, make_outage
+    ):
         """対象外の障害は巻き戻しの影響を受けないこと"""
         manager = StateManager(temp_state_file)
         snapshot = manager.snapshot_outages()
-        other = OutageInfo(
-            id="200",
-            date="2025.12.21",
-            status="",
-            title="別の障害",
-            area="",
-            url="https://www.toshima.co.jp/trouble/detail/200",
-        )
+        other = make_outage("200", date="2025.12.21", title="別の障害", area="")
         manager.update_outages([sample_outage, other])
         manager.mark_notified(other.id, "")
 
@@ -505,8 +431,11 @@ class TestChangeResult:
         result = ChangeResult(new_outages=[], status_changes=[])
         assert result.has_changes() is False
 
-    def test_total_changes(self, sample_outage):
-        """total_changesが正しい値を返すこと"""
+
+class TestStatusChange:
+    """StatusChangeのテスト"""
+
+    def test_describe_shows_ongoing_for_empty_status(self, sample_outage):
+        """空のステータスは「進行中」と表記されること"""
         change = StatusChange(outage=sample_outage, old_status="", new_status="復旧")
-        result = ChangeResult(new_outages=[sample_outage], status_changes=[change])
-        assert result.total_changes() == 2
+        assert change.describe() == "進行中 -> 復旧"

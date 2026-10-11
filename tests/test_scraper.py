@@ -21,11 +21,22 @@ def no_sleep(mocker):
     return mocker.patch("src.scraper.time.sleep")
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def sample_list_html():
-    """テスト用HTMLフィクスチャ"""
+    """テスト用HTMLフィクスチャ（不変の文字列なのでモジュール内で共有する）"""
     fixture_path = Path(__file__).parent / "fixtures" / "trouble_list.html"
     return fixture_path.read_text(encoding="utf-8")
+
+
+def _add_list_page(body: str, url: str = TOSHIMA_TROUBLE_URL) -> None:
+    """一覧ページの正常応答（UTF-8 宣言付き）を responses に登録する"""
+    responses_lib.add(
+        responses_lib.GET,
+        url,
+        body=body,
+        status=200,
+        content_type="text/html; charset=utf-8",
+    )
 
 
 @pytest.fixture
@@ -411,13 +422,7 @@ class TestFetchOutageList:
     @responses_lib.activate
     def test_returns_outages_from_page(self, scraper, sample_list_html):
         """正常なHTMLから障害情報リストを返すこと"""
-        responses_lib.add(
-            responses_lib.GET,
-            TOSHIMA_TROUBLE_URL,
-            body=sample_list_html,
-            status=200,
-            content_type="text/html; charset=utf-8",
-        )
+        _add_list_page(sample_list_html)
         outages = scraper.fetch_outage_list()
         assert len(outages) > 0
         assert all(isinstance(o, OutageInfo) for o in outages)
@@ -450,13 +455,7 @@ class TestFetchOutageList:
 
         最終ページの次は存在しないので 404 は正常系。1 ページ目の 4xx とは区別する。
         """
-        responses_lib.add(
-            responses_lib.GET,
-            TOSHIMA_TROUBLE_URL,
-            body=sample_list_html,
-            status=200,
-            content_type="text/html; charset=utf-8",
-        )
+        _add_list_page(sample_list_html)
         responses_lib.add(
             responses_lib.GET,
             f"{TOSHIMA_TROUBLE_URL}page/2/",
@@ -471,13 +470,7 @@ class TestFetchOutageList:
         self, scraper, sample_list_html
     ):
         """2ページ目以降の失敗は例外にせず、取得済みの結果を返すこと"""
-        responses_lib.add(
-            responses_lib.GET,
-            TOSHIMA_TROUBLE_URL,
-            body=sample_list_html,
-            status=200,
-            content_type="text/html; charset=utf-8",
-        )
+        _add_list_page(sample_list_html)
         responses_lib.add(
             responses_lib.GET,
             f"{TOSHIMA_TROUBLE_URL}page/2/",

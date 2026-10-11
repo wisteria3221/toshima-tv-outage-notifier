@@ -14,6 +14,19 @@ from .scraper import OutageInfo
 
 logger = logging.getLogger(__name__)
 
+# 状態ファイルに保存する OutageInfo のフィールド（変更判定・更新・新規作成で共有）
+_TRACKED_FIELDS = ("date", "status", "title", "area", "url")
+
+
+def _current_month() -> str:
+    """月間カウンタのキー（UTC の YYYY-MM）を返す"""
+    return datetime.now(UTC).strftime("%Y-%m")
+
+
+def display_status(status: str) -> str:
+    """ステータスの表示名を返す（空文字 = 括弧なし = 「進行中」）"""
+    return status or "進行中"
+
 
 class StateFileError(Exception):
     """既存の状態ファイルを読み込めなかったことを表す例外
@@ -33,6 +46,10 @@ class StatusChange:
     old_status: str
     new_status: str
 
+    def describe(self) -> str:
+        """ログ用の「旧 -> 新」表記を返す"""
+        return f"{display_status(self.old_status)} -> {display_status(self.new_status)}"
+
 
 @dataclass
 class ChangeResult:
@@ -43,11 +60,7 @@ class ChangeResult:
 
     def has_changes(self) -> bool:
         """変更があるかどうか"""
-        return len(self.new_outages) > 0 or len(self.status_changes) > 0
-
-    def total_changes(self) -> int:
-        """変更の総数"""
-        return len(self.new_outages) + len(self.status_changes)
+        return bool(self.new_outages or self.status_changes)
 
 
 class StateManager:
@@ -113,7 +126,7 @@ class StateManager:
             "outages": {},
             "stats": {
                 "total_notifications_this_month": 0,
-                "month": datetime.now(UTC).strftime("%Y-%m"),
+                "month": _current_month(),
             },
         }
 
@@ -161,36 +174,27 @@ class StateManager:
         """
         new_outages = []
         status_changes = []
-        stored_outages = self.state.get("outages", {})
+        stored_outages = self.state["outages"]
 
         for outage in current_outages:
-            if outage.id not in stored_outages:
-                # 新規障害
+            stored = stored_outages.get(outage.id)
+            if stored is None:
                 new_outages.append(outage)
                 logger.info(f"新規障害を検出: ID={outage.id}, タイトル={outage.title}")
+                continue
 
-            else:
-                # 既存障害のステータス変更チェック
-                stored = stored_outages[outage.id]
-                old_status = stored.get("status", "")
-                new_status = outage.status
+            # 既存障害: ステータスが変わり、かつ未通知のステータスなら変更として扱う
+            old_status = stored.get("status", "")
+            if outage.status == old_status:
+                continue
+            if outage.status in stored.get("notified_statuses", []):
+                continue
 
-                # ステータスが変更された場合
-                if old_status != new_status:
-                    # 既に通知済みのステータスかチェック
-                    notified_statuses = stored.get("notified_statuses", [])
-                    if new_status not in notified_statuses:
-                        status_changes.append(
-                            StatusChange(
-                                outage=outage,
-                                old_status=old_status,
-                                new_status=new_status,
-                            )
-                        )
-                        logger.info(
-                            f"ステータス変更を検出: ID={outage.id}, "
-                            f"{old_status or '(進行中)'} -> {new_status or '(進行中)'}"
-                        )
+            change = StatusChange(
+                outage=outage, old_status=old_status, new_status=outage.status
+            )
+            status_changes.append(change)
+            logger.info(f"ステータス変更を検出: ID={outage.id}, {change.describe()}")
 
         return ChangeResult(new_outages=new_outages, status_changes=status_changes)
 
@@ -203,49 +207,27 @@ class StateManager:
         # 月のロールオーバーチェック
         self._ensure_current_month()
 
-        stored_outages = self.state.get("outages", {})
+        stored_outages = self.state["outages"]
         now = datetime.now(UTC).isoformat()
 
         for outage in outages:
-            if outage.id in stored_outages:
-                # 既存エントリー: フィールド変更をチェック
-                existing = stored_outages[outage.id]
-                changed = (
-                    existing.get("date") != outage.date
-                    or existing.get("status") != outage.status
-                    or existing.get("title") != outage.title
-                    or existing.get("area") != outage.area
-                    or existing.get("url") != outage.url
-                )
+            fields = {name: getattr(outage, name) for name in _TRACKED_FIELDS}
+            existing = stored_outages.get(outage.id)
 
-                if changed:
-                    self._mark_dirty()
-                    existing.update(
-                        {
-                            "date": outage.date,
-                            "status": outage.status,
-                            "title": outage.title,
-                            "area": outage.area,
-                            "url": outage.url,
-                            "last_updated": now,
-                        }
-                    )
-            else:
+            if existing is None:
                 # 新規エントリー: 常にdirty
                 self._mark_dirty()
                 stored_outages[outage.id] = {
                     "id": outage.id,
-                    "date": outage.date,
-                    "status": outage.status,
-                    "title": outage.title,
-                    "area": outage.area,
-                    "url": outage.url,
+                    **fields,
                     "first_seen": now,
                     "last_updated": now,
                     "notified_statuses": [],
                 }
-
-        self.state["outages"] = stored_outages
+            elif any(existing.get(k) != v for k, v in fields.items()):
+                # 既存エントリー: いずれかのフィールドが変わっていれば更新
+                self._mark_dirty()
+                existing.update(fields, last_updated=now)
 
     def snapshot_outages(self) -> dict:
         """障害エントリの現在の状態を複製して返す（rollback_outages 用）
@@ -253,7 +235,7 @@ class StateManager:
         Returns:
             outages 辞書のディープコピー
         """
-        return copy.deepcopy(self.state.get("outages", {}))
+        return copy.deepcopy(self.state["outages"])
 
     def rollback_outages(self, outage_ids: Iterable[str], snapshot: dict) -> None:
         """指定した障害エントリを snapshot 時点の内容に戻す
@@ -261,20 +243,21 @@ class StateManager:
         通知に失敗した障害だけを update_outages() 前の状態に戻し、次回実行で
         再び「新規」または「ステータス変更」として検出されるようにする。
         snapshot に存在しなかった ID（新規障害）はエントリごと削除する。
+        snapshot のエントリはそのまま state に移すので、呼び出し後に snapshot を
+        使い回さないこと。
 
         Args:
             outage_ids: 戻す対象の障害ID
             snapshot: snapshot_outages() の戻り値
         """
-        outages = self.state.get("outages", {})
+        outages = self.state["outages"]
         for outage_id in outage_ids:
             if outage_id in snapshot:
-                outages[outage_id] = copy.deepcopy(snapshot[outage_id])
+                outages[outage_id] = snapshot[outage_id]
             else:
                 outages.pop(outage_id, None)
             self._mark_dirty()
             logger.debug(f"障害エントリを巻き戻し: ID={outage_id}")
-        self.state["outages"] = outages
 
     def mark_notified(self, outage_id: str, status: str) -> None:
         """ステータスを通知済みとしてマーク
@@ -283,14 +266,14 @@ class StateManager:
             outage_id: 障害ID
             status: 通知したステータス
         """
-        outages = self.state.get("outages", {})
-        if outage_id in outages:
-            notified = outages[outage_id].get("notified_statuses", [])
-            if status not in notified:
-                notified.append(status)
-                outages[outage_id]["notified_statuses"] = notified
-                self._mark_dirty()
-                logger.debug(f"通知済みマーク: ID={outage_id}, ステータス={status}")
+        entry = self.state["outages"].get(outage_id)
+        if entry is None:
+            return
+        notified = entry.setdefault("notified_statuses", [])
+        if status not in notified:
+            notified.append(status)
+            self._mark_dirty()
+            logger.debug(f"通知済みマーク: ID={outage_id}, ステータス={status}")
 
     def increment_notification_count(self) -> None:
         """月間通知カウントをインクリメント"""
@@ -308,11 +291,10 @@ class StateManager:
         Returns:
             今月の通知数
         """
-        current_month = datetime.now(UTC).strftime("%Y-%m")
         stats = self.state.get("stats", {})
 
         # 月が変わっていればカウントは0
-        if stats.get("month") != current_month:
+        if stats.get("month") != _current_month():
             return 0
 
         return stats.get("total_notifications_this_month", 0)
@@ -332,7 +314,7 @@ class StateManager:
 
     def _ensure_current_month(self) -> None:
         """月が変わっていた場合に統計カウンターをリセット（内部用）"""
-        current_month = datetime.now(UTC).strftime("%Y-%m")
+        current_month = _current_month()
         stats = self.state.get("stats", {})
         if stats.get("month") != current_month:
             logger.info(f"月が変わりました: {stats.get('month')} -> {current_month}")

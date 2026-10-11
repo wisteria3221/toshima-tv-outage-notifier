@@ -41,16 +41,13 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
 
 def get_x_credentials() -> dict[str, str]:
-    """X API認証情報を環境変数から取得"""
+    """X API認証情報を環境変数から取得
+
+    キー名は tweepy.Client のキーワード引数に合わせてあり、そのまま展開して渡せる。
+    """
     return {
         "consumer_key": os.environ.get("X_API_KEY", ""),
         "consumer_secret": os.environ.get("X_API_SECRET", ""),
         "access_token": os.environ.get("X_ACCESS_TOKEN", ""),
         "access_token_secret": os.environ.get("X_ACCESS_TOKEN_SECRET", ""),
     }
-
-
-def validate_x_credentials() -> bool:
-    """X API認証情報が設定されているか確認"""
-    creds = get_x_credentials()
-    return all(creds.values())

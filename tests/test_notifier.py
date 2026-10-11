@@ -1,141 +1,104 @@
 """通知モジュールのテスト"""
 
 import json
+from dataclasses import replace
 
 import pytest
 import requests
 import tweepy
 
+from src.config import MONTHLY_TWEET_LIMIT
 from src.notifier import (
+    _RATE_LIMIT_CRITICAL_RATIO,
+    _RATE_LIMIT_REDUCED_RATIO,
     XNotifier,
     can_send_notification,
     should_notify_change,
     weighted_length,
 )
-from src.scraper import OutageInfo
 from src.state_manager import StateManager, StatusChange
 
 
-@pytest.fixture
-def sample_outage_no_area():
-    """地域なしの障害情報"""
-    return OutageInfo(
-        id="101",
-        date="2025.12.21",
-        status="",
-        title="別エリア障害",
-        area="",
-        url="https://www.toshima.co.jp/trouble/detail/101",
-    )
+def _change(outage, new_status: str) -> StatusChange:
+    """進行中（空文字）から new_status へのステータス変更"""
+    return StatusChange(outage=outage, old_status="", new_status=new_status)
 
 
-@pytest.fixture
-def sample_outage_no_date():
-    """日付なしの障害情報"""
-    return OutageInfo(
-        id="102",
-        date="",
-        status="",
-        title="日付なし障害",
-        area="南池袋",
-        url="https://www.toshima.co.jp/trouble/detail/102",
-    )
+def _manager_with_count(state_file, count: int) -> StateManager:
+    """今月の通知カウンタが count の StateManager を返す"""
+    manager = StateManager(state_file)
+    manager.state["stats"]["total_notifications_this_month"] = count
+    return manager
 
 
 class TestFormatNewOutageMessage:
     """新規障害メッセージフォーマットのテスト"""
 
-    def test_format_includes_correct_header(self, sample_outage):
+    def test_format_includes_correct_header(self, notifier, sample_outage):
         """正しいヘッダーが含まれること"""
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
         message = notifier._format_new_outage_message(sample_outage)
         assert "【としまテレビ 障害情報】" in message
 
-    def test_format_includes_title(self, sample_outage):
+    def test_format_includes_title(self, notifier, sample_outage):
         """タイトルが含まれること"""
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
         message = notifier._format_new_outage_message(sample_outage)
         assert sample_outage.title in message
 
-    def test_format_includes_date_when_present(self, sample_outage):
+    def test_format_includes_date_when_present(self, notifier, sample_outage):
         """日付がある場合に含まれること"""
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
         message = notifier._format_new_outage_message(sample_outage)
         assert sample_outage.date in message
 
-    def test_format_omits_date_when_empty(self, sample_outage_no_date):
+    def test_format_omits_date_when_empty(self, notifier, sample_outage):
         """日付がない場合に「日時:」行が含まれないこと"""
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
-        message = notifier._format_new_outage_message(sample_outage_no_date)
+        message = notifier._format_new_outage_message(replace(sample_outage, date=""))
         assert "日時:" not in message
 
-    def test_format_includes_area_when_present(self, sample_outage):
+    def test_format_includes_area_when_present(self, notifier, sample_outage):
         """地域がある場合に含まれること"""
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
         message = notifier._format_new_outage_message(sample_outage)
         assert sample_outage.area in message
 
-    def test_format_omits_area_when_empty(self, sample_outage_no_area):
+    def test_format_omits_area_when_empty(self, notifier, sample_outage):
         """地域がない場合に「地域:」行が含まれないこと"""
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
-        message = notifier._format_new_outage_message(sample_outage_no_area)
+        message = notifier._format_new_outage_message(replace(sample_outage, area=""))
         assert "地域:" not in message
 
-    def test_format_includes_url(self, sample_outage):
+    def test_format_includes_url(self, notifier, sample_outage):
         """URLが含まれること"""
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
         message = notifier._format_new_outage_message(sample_outage)
         assert sample_outage.url in message
 
-    def test_resolved_status_on_new_outage_uses_resolution_header(self, sample_outage):
+    def test_resolved_status_on_new_outage_uses_resolution_header(
+        self, notifier, sample_outage
+    ):
         """初検出時に既に「復旧」の障害は復旧ヘッダーで通知されること
 
         進行中として通知すると、復旧ステータスが通知済みになり続報が出ない。
         """
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
-        resolved = OutageInfo(
-            id=sample_outage.id,
-            date=sample_outage.date,
-            status="復旧",
-            title=sample_outage.title,
-            area=sample_outage.area,
-            url=sample_outage.url,
+        message = notifier._format_new_outage_message(
+            replace(sample_outage, status="復旧")
         )
-        message = notifier._format_new_outage_message(resolved)
         lines = message.split("\n")
         assert lines[0] == "【としまテレビ 復旧情報】"
         assert lines[1] == f"{sample_outage.title} が復旧しました"
         assert f"日時: {sample_outage.date}" in lines
 
-    def test_other_status_on_new_outage_is_appended_to_title(self, sample_outage):
+    def test_other_status_on_new_outage_is_appended_to_title(
+        self, notifier, sample_outage
+    ):
         """初検出時に「仮復旧」など解決系以外のステータスがタイトルに付記されること"""
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
-        partial = OutageInfo(
-            id=sample_outage.id,
-            date=sample_outage.date,
-            status="仮復旧",
-            title=sample_outage.title,
-            area=sample_outage.area,
-            url=sample_outage.url,
+        message = notifier._format_new_outage_message(
+            replace(sample_outage, status="仮復旧")
         )
-        message = notifier._format_new_outage_message(partial)
         lines = message.split("\n")
         assert lines[0] == "【としまテレビ 障害情報】"
         assert lines[1] == f"{sample_outage.title}（仮復旧）"
 
-    def test_empty_status_on_new_outage_shows_plain_title(self, sample_outage):
+    def test_empty_status_on_new_outage_shows_plain_title(
+        self, notifier, sample_outage
+    ):
         """ステータスなし（進行中）の新規障害はタイトルだけが表示されること"""
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
         assert sample_outage.status == ""
         message = notifier._format_new_outage_message(sample_outage)
         assert message.split("\n")[1] == sample_outage.title
@@ -144,46 +107,33 @@ class TestFormatNewOutageMessage:
 class TestFormatStatusChangeMessage:
     """ステータス変更メッセージフォーマットのテスト"""
 
-    def _make_change(self, outage, new_status):
-        return StatusChange(outage=outage, old_status="", new_status=new_status)
-
-    def test_resolved_status_uses_resolution_header(self, sample_outage):
+    def test_resolved_status_uses_resolution_header(self, notifier, sample_outage):
         """「復旧」ステータスで復旧ヘッダーが使われること"""
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
-        change = self._make_change(sample_outage, "復旧")
+        change = _change(sample_outage, "復旧")
         message = notifier._format_status_change_message(change)
         assert "【としまテレビ 復旧情報】" in message
 
-    def test_ended_status_uses_ended_header(self, sample_outage):
+    def test_ended_status_uses_ended_header(self, notifier, sample_outage):
         """「終了」ステータスで終了ヘッダーが使われること"""
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
-        change = self._make_change(sample_outage, "終了")
+        change = _change(sample_outage, "終了")
         message = notifier._format_status_change_message(change)
         assert "【としまテレビ 終了情報】" in message
 
-    def test_completed_status_uses_completed_header(self, sample_outage):
+    def test_completed_status_uses_completed_header(self, notifier, sample_outage):
         """「完了」ステータスで完了ヘッダーが使われること"""
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
-        change = self._make_change(sample_outage, "完了")
+        change = _change(sample_outage, "完了")
         message = notifier._format_status_change_message(change)
         assert "【としまテレビ 完了情報】" in message
 
-    def test_in_progress_status_uses_update_header(self, sample_outage):
+    def test_in_progress_status_uses_update_header(self, notifier, sample_outage):
         """「調査中」ステータスで更新ヘッダーが使われること"""
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
-        change = self._make_change(sample_outage, "調査中")
+        change = _change(sample_outage, "調査中")
         message = notifier._format_status_change_message(change)
         assert "【としまテレビ 障害情報更新】" in message
 
-    def test_empty_new_status_defaults_to_ongoing(self, sample_outage):
+    def test_empty_new_status_defaults_to_ongoing(self, notifier, sample_outage):
         """空のステータスが「進行中」として扱われること"""
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
-        change = self._make_change(sample_outage, "")
+        change = _change(sample_outage, "")
         message = notifier._format_status_change_message(change)
         assert "【としまテレビ 障害情報更新】" in message
         assert "進行中" in message
@@ -216,34 +166,26 @@ class TestWeightedLength:
 class TestTruncateMessage:
     """メッセージ切り詰め（最終防衛線）のテスト"""
 
-    def test_short_message_unchanged(self):
+    def test_short_message_unchanged(self, notifier):
         """上限以下のメッセージは変更されないこと"""
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
         short_msg = "あ" * 100
         assert notifier._truncate_message(short_msg) == short_msg
 
-    def test_long_japanese_message_truncated_by_weight(self):
+    def test_long_japanese_message_truncated_by_weight(self, notifier):
         """日本語 150 文字（len では 280 未満）でも重み付きで上限に収まること"""
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
         long_msg = "あ" * 150
         result = notifier._truncate_message(long_msg)
         assert weighted_length(result) <= XNotifier.MAX_TWEET_LENGTH
         assert result.endswith("...")
 
-    def test_exactly_at_limit_unchanged(self):
+    def test_exactly_at_limit_unchanged(self, notifier):
         """重み付きでちょうど上限のメッセージは変更されないこと"""
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
         exact_msg = "あ" * 140  # 140 × 2 = 280
         assert weighted_length(exact_msg) == XNotifier.MAX_TWEET_LENGTH
         assert notifier._truncate_message(exact_msg) == exact_msg
 
-    def test_url_line_is_kept_intact(self):
+    def test_url_line_is_kept_intact(self, notifier):
         """固定行だけで上限を超えても末尾の URL 行は切らないこと"""
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
         header = "【としまテレビ 障害情報】"
         url_line = "詳細: https://www.toshima.co.jp/trouble/detail/120"
         message = "\n".join([header, "タイトル...", "地域: " + "あ" * 200, url_line])
@@ -257,18 +199,9 @@ class TestTruncateMessage:
         assert lines[-1] == url_line
         assert lines[-2].endswith("...")
 
-    def test_new_outage_with_huge_area_keeps_url(self):
+    def test_new_outage_with_huge_area_keeps_url(self, notifier, make_outage):
         """地域が異常に長い新規障害でも「詳細: URL」行が末尾に残ること"""
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
-        outage = OutageInfo(
-            id="120",
-            date="2025.12.20",
-            status="",
-            title="一部地域 通信障害について",
-            area="あ" * 200,
-            url="https://www.toshima.co.jp/trouble/detail/120",
-        )
+        outage = make_outage("120", title="一部地域 通信障害について", area="あ" * 200)
 
         message = notifier._format_new_outage_message(outage)
 
@@ -279,25 +212,21 @@ class TestTruncateMessage:
 class TestComposeMessageTruncation:
     """長いタイトルでも URL が残る切り詰めのテスト"""
 
-    def _notifier(self):
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = None
-        return notifier
+    @pytest.fixture
+    def long_outage(self, make_outage):
+        """タイトル長を指定して障害情報を作るファクトリ"""
 
-    def _long_outage(self, title_len: int = 200) -> OutageInfo:
-        return OutageInfo(
-            id="1",
-            date="2025.12.09",
-            status="",
-            title="長" * title_len,
-            area="池袋本町1丁目付近",
-            url="https://www.toshima.co.jp/trouble/detail/1",
-        )
+        def _make(title_len: int = 200):
+            return make_outage(
+                "1", date="2025.12.09", title="長" * title_len, area="池袋本町1丁目付近"
+            )
 
-    def test_new_outage_long_title_keeps_url_and_header(self):
+        return _make
+
+    def test_new_outage_long_title_keeps_url_and_header(self, notifier, long_outage):
         """新規障害メッセージが長いタイトルでも URL とヘッダーを残すこと"""
-        outage = self._long_outage()
-        message = self._notifier()._format_new_outage_message(outage)
+        outage = long_outage()
+        message = notifier._format_new_outage_message(outage)
         lines = message.split("\n")
         assert weighted_length(message) <= XNotifier.MAX_TWEET_LENGTH
         assert lines[0] == "【としまテレビ 障害情報】"
@@ -307,29 +236,28 @@ class TestComposeMessageTruncation:
         assert lines[1].endswith("...")
         assert lines[1].startswith("長")
 
-    def test_status_change_long_title_keeps_suffix_and_url(self):
+    def test_status_change_long_title_keeps_suffix_and_url(self, notifier, long_outage):
         """ステータス変更メッセージが長いタイトルでも「が復旧しました」と URL を残すこと"""
-        outage = self._long_outage()
-        change = StatusChange(outage=outage, old_status="", new_status="復旧")
-        message = self._notifier()._format_status_change_message(change)
+        outage = long_outage()
+        message = notifier._format_status_change_message(_change(outage, "復旧"))
         lines = message.split("\n")
         assert weighted_length(message) <= XNotifier.MAX_TWEET_LENGTH
         assert lines[0] == "【としまテレビ 復旧情報】"
         assert lines[1].endswith("... が復旧しました")
         assert lines[-1] == f"詳細: {outage.url}"
 
-    def test_title_within_limit_is_not_truncated(self):
+    def test_title_within_limit_is_not_truncated(self, notifier, long_outage):
         """上限に収まるタイトルは切り詰められないこと"""
-        outage = self._long_outage(title_len=50)
-        message = self._notifier()._format_new_outage_message(outage)
+        outage = long_outage(title_len=50)
+        message = notifier._format_new_outage_message(outage)
         assert "..." not in message
         assert outage.title in message
 
-    def test_title_is_truncated_at_weighted_limit(self):
+    def test_title_is_truncated_at_weighted_limit(self, notifier, long_outage):
         """len() では収まるが重み付きで超えるタイトルが切り詰められること"""
         # タイトル 130 文字 × 2 = 260 と固定行で 280 を超えるが len() では 280 未満
-        outage = self._long_outage(title_len=130)
-        message = self._notifier()._format_new_outage_message(outage)
+        outage = long_outage(title_len=130)
+        message = notifier._format_new_outage_message(outage)
         assert len(message) < 280
         assert weighted_length(message) <= XNotifier.MAX_TWEET_LENGTH
         assert "..." in message
@@ -345,59 +273,45 @@ class TestCanSendNotification:
 
     def test_cannot_send_at_limit(self, temp_state_file):
         """制限（450件）に達した場合に送信不可なこと"""
-        manager = StateManager(temp_state_file)
-        for _ in range(450):
-            manager.increment_notification_count()
+        manager = _manager_with_count(temp_state_file, MONTHLY_TWEET_LIMIT)
         assert can_send_notification(manager) is False
 
     def test_cannot_send_over_limit(self, temp_state_file):
         """制限を超えた場合に送信不可なこと"""
-        manager = StateManager(temp_state_file)
-        for _ in range(451):
-            manager.increment_notification_count()
+        manager = _manager_with_count(temp_state_file, MONTHLY_TWEET_LIMIT + 1)
         assert can_send_notification(manager) is False
 
 
 class TestShouldNotifyChange:
     """変更通知判定のテスト"""
 
+    REDUCED = int(MONTHLY_TWEET_LIMIT * _RATE_LIMIT_REDUCED_RATIO)  # 90% = 405
+    CRITICAL = int(MONTHLY_TWEET_LIMIT * _RATE_LIMIT_CRITICAL_RATIO)  # 96% = 432
+
     def test_allows_all_below_90_percent(self, temp_state_file):
         """90%未満の場合、どの変更タイプも通知できること"""
-        manager = StateManager(temp_state_file)
-        # 89% = int(450 * 0.89) = 400
-        for _ in range(400):
-            manager.increment_notification_count()
+        manager = _manager_with_count(temp_state_file, self.REDUCED - 1)
         assert should_notify_change(manager, "new") is True
         assert should_notify_change(manager, "status_change") is True
 
     def test_new_allowed_at_90_percent(self, temp_state_file):
         """90%以上の場合、新規障害は通知できること"""
-        manager = StateManager(temp_state_file)
-        # 90% = int(450 * 0.90) = 405
-        for _ in range(405):
-            manager.increment_notification_count()
+        manager = _manager_with_count(temp_state_file, self.REDUCED)
         assert should_notify_change(manager, "new") is True
 
     def test_status_change_blocked_at_90_percent(self, temp_state_file):
         """90%以上の場合、ステータス変更は通知されないこと"""
-        manager = StateManager(temp_state_file)
-        for _ in range(405):
-            manager.increment_notification_count()
+        manager = _manager_with_count(temp_state_file, self.REDUCED)
         assert should_notify_change(manager, "status_change") is False
 
     def test_new_allowed_at_96_percent(self, temp_state_file):
         """96%以上の場合、新規障害は通知できること"""
-        manager = StateManager(temp_state_file)
-        # 96% = int(450 * 0.96) = 432
-        for _ in range(432):
-            manager.increment_notification_count()
+        manager = _manager_with_count(temp_state_file, self.CRITICAL)
         assert should_notify_change(manager, "new") is True
 
     def test_status_change_blocked_at_96_percent(self, temp_state_file):
         """96%以上の場合、ステータス変更は通知されないこと"""
-        manager = StateManager(temp_state_file)
-        for _ in range(432):
-            manager.increment_notification_count()
+        manager = _manager_with_count(temp_state_file, self.CRITICAL)
         assert should_notify_change(manager, "status_change") is False
 
 
@@ -415,50 +329,49 @@ def _forbidden(detail: str) -> tweepy.Forbidden:
 class TestPostTweetErrors:
     """投稿時のエラーハンドリングのテスト"""
 
-    def _notifier_with_failing_client(self, mocker, exc):
+    @pytest.fixture
+    def failing_notifier(self, mocker, notifier):
+        """create_tweet が指定した例外を投げる XNotifier を作るファクトリ"""
         mocker.patch("src.notifier.DRY_RUN", False)
-        notifier = XNotifier.__new__(XNotifier)
-        notifier.client = mocker.Mock()
-        notifier.client.create_tweet.side_effect = exc
-        return notifier
 
-    def test_tweepy_exception_returns_false(self, mocker):
+        def _make(exc):
+            notifier.client = mocker.Mock()
+            notifier.client.create_tweet.side_effect = exc
+            return notifier
+
+        return _make
+
+    def test_tweepy_exception_returns_false(self, failing_notifier):
         """tweepy の例外は False を返すこと"""
-        notifier = self._notifier_with_failing_client(
-            mocker, tweepy.TweepyException("api error")
-        )
+        notifier = failing_notifier(tweepy.TweepyException("api error"))
         assert notifier._post_tweet("hello") is False
 
-    def test_duplicate_content_forbidden_is_treated_as_sent(self, mocker):
+    def test_duplicate_content_forbidden_is_treated_as_sent(self, failing_notifier):
         """同一内容による 403 は「既に投稿済み」として True を返すこと
 
         投稿成功後に状態の push が失敗すると次回同じ本文を再投稿して 403 になる。
         これを失敗扱いにすると巻き戻し → 再投稿 → 403 を毎回繰り返してしまう。
         """
-        notifier = self._notifier_with_failing_client(
-            mocker,
-            _forbidden("You are not allowed to create a Tweet with duplicate content."),
+        notifier = failing_notifier(
+            _forbidden("You are not allowed to create a Tweet with duplicate content.")
         )
         assert notifier._post_tweet("hello") is True
 
-    def test_other_forbidden_returns_false(self, mocker):
+    def test_other_forbidden_returns_false(self, failing_notifier):
         """同一内容以外の 403（権限不足など）は失敗として False を返すこと"""
-        notifier = self._notifier_with_failing_client(
-            mocker,
+        notifier = failing_notifier(
             _forbidden(
                 "Your client app is not configured with the appropriate permissions."
-            ),
+            )
         )
         assert notifier._post_tweet("hello") is False
 
-    def test_requests_exception_returns_false(self, mocker):
+    def test_requests_exception_returns_false(self, failing_notifier):
         """requests の接続エラーも例外を伝播させず False を返すこと
 
         tweepy は接続エラーを TweepyException に包まないため、個別に捕捉が必要。
         """
-        notifier = self._notifier_with_failing_client(
-            mocker, requests.exceptions.ConnectionError("network down")
-        )
+        notifier = failing_notifier(requests.exceptions.ConnectionError("network down"))
         assert notifier._post_tweet("hello") is False
 
 
@@ -476,6 +389,5 @@ class TestXNotifierDryRun:
         """DRY_RUN モードでステータス変更通知がTrueを返すこと"""
         mocker.patch("src.notifier.DRY_RUN", True)
         notifier = XNotifier()
-        change = StatusChange(outage=sample_outage, old_status="", new_status="復旧")
-        result = notifier.notify_status_change(change)
+        result = notifier.notify_status_change(_change(sample_outage, "復旧"))
         assert result is True
