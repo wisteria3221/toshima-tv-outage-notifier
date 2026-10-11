@@ -280,8 +280,24 @@ class XNotifier:
         if weighted_length(message) <= self.MAX_TWEET_LENGTH:
             return message
 
-        budget = self.MAX_TWEET_LENGTH - _plain_weighted_length(_ELLIPSIS)
-        truncated = _cut_to_weight(message, budget) + _ELLIPSIS
+        ellipsis_weight = _plain_weighted_length(_ELLIPSIS)
+        lines = message.split("\n")
+        if len(lines) < 3:
+            # ヘッダー・本文・URL 行に分かれていない単純なテキストは全体を切り詰める
+            budget = self.MAX_TWEET_LENGTH - ellipsis_weight
+            truncated = _cut_to_weight(message, budget) + _ELLIPSIS
+        else:
+            # 先頭行（ヘッダー）と末尾行（詳細 URL）は残し、間の行だけを切り詰める。
+            # _cut_to_weight は URL を 23 文字ではなく 1 文字ずつ数えるため、メッセージ
+            # 全体を切ると末尾の URL の途中で切れてリンクが壊れる。
+            head, tail = lines[0], lines[-1]
+            body = "\n".join(lines[1:-1])
+            frame_weight = (
+                weighted_length(head) + weighted_length(tail) + 2
+            )  # 改行 2 つ
+            budget = self.MAX_TWEET_LENGTH - frame_weight - ellipsis_weight
+            fitted_body = _cut_to_weight(body, max(budget, 0)).rstrip() + _ELLIPSIS
+            truncated = "\n".join([head, fitted_body, tail])
         logger.warning(
             f"メッセージを切り詰めました: {weighted_length(message)} -> "
             f"{weighted_length(truncated)} 文字（重み付き）"

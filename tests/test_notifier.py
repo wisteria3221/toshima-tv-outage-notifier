@@ -240,6 +240,41 @@ class TestTruncateMessage:
         assert weighted_length(exact_msg) == XNotifier.MAX_TWEET_LENGTH
         assert notifier._truncate_message(exact_msg) == exact_msg
 
+    def test_url_line_is_kept_intact(self):
+        """固定行だけで上限を超えても末尾の URL 行は切らないこと"""
+        notifier = XNotifier.__new__(XNotifier)
+        notifier.client = None
+        header = "【としまテレビ 障害情報】"
+        url_line = "詳細: https://www.toshima.co.jp/trouble/detail/120"
+        message = "\n".join([header, "タイトル...", "地域: " + "あ" * 200, url_line])
+        assert weighted_length(message) > XNotifier.MAX_TWEET_LENGTH
+
+        result = notifier._truncate_message(message)
+
+        assert weighted_length(result) <= XNotifier.MAX_TWEET_LENGTH
+        lines = result.split("\n")
+        assert lines[0] == header
+        assert lines[-1] == url_line
+        assert lines[-2].endswith("...")
+
+    def test_new_outage_with_huge_area_keeps_url(self):
+        """地域が異常に長い新規障害でも「詳細: URL」行が末尾に残ること"""
+        notifier = XNotifier.__new__(XNotifier)
+        notifier.client = None
+        outage = OutageInfo(
+            id="120",
+            date="2025.12.20",
+            status="",
+            title="一部地域 通信障害について",
+            area="あ" * 200,
+            url="https://www.toshima.co.jp/trouble/detail/120",
+        )
+
+        message = notifier._format_new_outage_message(outage)
+
+        assert weighted_length(message) <= XNotifier.MAX_TWEET_LENGTH
+        assert message.split("\n")[-1] == f"詳細: {outage.url}"
+
 
 class TestComposeMessageTruncation:
     """長いタイトルでも URL が残る切り詰めのテスト"""
