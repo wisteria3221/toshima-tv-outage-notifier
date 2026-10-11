@@ -15,7 +15,7 @@
   - _Requirements: 5.4_
 
 - [ ] 2. コア: 魚拓取得と記録
-- [ ] 2.1 (P) Wayback Machine への保存要求と完了確認を行う archiver を実装する
+- [x] 2.1 (P) Wayback Machine への保存要求と完了確認を行う archiver を実装する
   - 認証情報が揃っていれば HTTP セッションに JSON 受け入れと `LOW key:secret` 形式の認証ヘッダを設定し、揃っていなければ無効化して警告ログを生成時に 1 回出す
   - 保存要求（POST、フォームに対象 URL・初回判定の省略・JS 動作なし・60 秒以内の既存キャプチャを流用しない指定）を送り、応答の job_id を取り出す。job_id が無ければ応答の message を警告ログに出して失敗にする
   - job_id のステータスを間隔ごとに問い合わせ、成功なら timestamp から公開 URL（`https://web.archive.org/web/<timestamp>/<対象 URL>`）を組み立てて返す。エラー応答（status_ext と message を警告に含める）、上限時間超過、通信エラー、非 JSON 応答はすべて None にする
@@ -75,3 +75,7 @@
   - 観測可能な完了条件: pytest 全件通過・ruff 違反 0・format 差分 0・DRY RUN 実行が終了コード 0 で、状態ファイルの差分を戻した後の作業ツリーにコードとドキュメントの変更だけが残る
   - _Depends: 3.1, 3.2, 3.3_
   - _Requirements: 5.4, 3.2, 4.3_
+
+## Implementation Notes
+- 2.1: `_wait_for_capture` の上限判定は「次の待機が終わる前に上限を超えるか」で行う（待機後に判定すると 1 件の所要時間が `WAYBACK_POLL_INTERVAL` ぶん超過する）。テストでは autouse の `no_sleep` が待機回数に上限を設けており、上限判定が壊れてもハングせず失敗する。
+- 2.1: `time.monotonic` を `side_effect` のリストでモックするテストは、呼び出し回数（開始時 1 回 + pending ごとに 1 回）ぶんの値を用意すること。
