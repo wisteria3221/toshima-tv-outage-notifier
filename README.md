@@ -153,6 +153,17 @@ GitHub Actions の `schedule` はベストエフォートで、高負荷時に�
 2. 表示された Ping URL（`https://hc-ping.com/<uuid>` 形式）をリポジトリのシークレット `HEALTHCHECKS_URL` に登録する
 3. 通知先（メール、Slack、Discord など）を Healthchecks 側で設定する
 
+ダッシュボードを使わず Management API で行う場合は、Claude Code 用スキル [.claude/skills/healthchecks-api/](.claude/skills/healthchecks-api/) の同梱 CLI が使えます（API キーは Healthchecks のプロジェクト設定で発行し、環境変数 `HEALTHCHECKS_API_KEY` か `.env` に設定）。
+
+```bash
+HC="python3 .claude/skills/healthchecks-api/scripts/hc.py"
+$HC checks create --name toshima-tv-outage-notifier --slug toshima-tv-outage-notifier \
+  --timeout 3600 --grace 1800 --channels '*' --unique slug      # 再実行しても重複しない
+PING_URL=$($HC checks list --slug toshima-tv-outage-notifier \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["checks"][0]["ping_url"])')
+gh secret set HEALTHCHECKS_URL --body "$PING_URL"
+```
+
 シークレット未設定の場合、このステップはスキップされます。
 終了コード 2（上流不通）のときは `/log` に記録のみ送り、期限はリセットしません。上流不通が長引いた場合も未起動と同様にアラートされます。
 終了コード 1 や Lint/テスト失敗のときは `/fail` に送るので即時アラートになります。
