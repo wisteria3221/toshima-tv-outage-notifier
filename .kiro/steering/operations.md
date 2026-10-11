@@ -19,9 +19,9 @@ GitHub schedule（フォールバック）──┘        │
 
 | 経路 | 役割 | 止まったときの見え方 |
 |---|---|---|
-| 外部 cron（毎時 7, 37 分） | 主系。GitHub の Fine-grained PAT で dispatch | 起動回数が `schedule` 分だけに落ちる → Healthchecks の期限切れで検知 |
-| `schedule`（毎時 22, 52 分） | フォールバック。GitHub 側で間引かれる前提 | 単独では検知不能。履歴に残らない |
-| Healthchecks.io | dead-man's switch。Period 30 分 / Grace 1 時間 | ping 途絶で通知先にアラート |
+| 外部 cron（10 分ごと、毎時 7, 17, …, 57 分） | 主系。GitHub の Fine-grained PAT で dispatch | 起動回数が `schedule` 分だけに落ちる → Healthchecks の期限切れで検知 |
+| `schedule`（毎時 52 分、1 時間に 1 回） | フォールバック。GitHub 側で間引かれる前提 | 単独では検知不能。履歴に残らない |
+| Healthchecks.io | dead-man's switch。Period 10 分 / Grace 30 分 | ping 途絶で通知先にアラート |
 
 - `concurrency: group: check-outage` で直列化しているため、2 経路が重なっても state.json の push は衝突しない。「待機中のラン」が見えるのは正常
 - Healthchecks 未設定（`HEALTHCHECKS_URL` 空）の構成は許容するが、その場合は未起動を検知できないことを理解した上で運用する
@@ -35,7 +35,7 @@ GitHub schedule（フォールバック）──┘        │
 | 緑 | 成功。変更があれば state.json がコミットされる | なし |
 | 緑 + 警告アノテーション「Upstream unavailable」 | 終了コード 2。としまテレビ側に到達できない | 単発なら放置。Healthchecks の `/log` に記録される。数時間続く場合は実際にサイトが落ちているかブラウザで確認 |
 | 赤（Run outage checker で失敗） | 終了コード 1。通知失敗・0 件解析・予期しない例外 | ログで原因を分類（下表）。失敗した障害は状態に残っていないので、原因を直せば次回実行で再通知される |
-| 赤（Lint / Run tests で失敗） | コード品質ゲートで止まった。障害チェック自体が走っていない | 直ちに修正して push。この間は通知が完全に止まる |
+| 赤（Lint and Test ワークフローで失敗） | push / PR 時の Lint・テストの失敗。障害チェックは止まらず、壊れたコードのまま 10 分ごとに動き続ける | 直ちに修正して push。障害チェックの結果も合わせて確認する |
 | Healthchecks からアラート | 一定時間 ping がない | Actions の履歴を確認。ランが無い → 外部 cron のトークン期限切れや cron-job.org 側の停止を疑う。ランはあるが全部 2 → 上流不通の長期化 |
 
 終了コード 1 の原因分類:
@@ -84,7 +84,7 @@ X API Free 枠（月 500）に対し 450 を上限とし、月初（UTC）にリ
 2. 依存を変えたら `uv lock` を実行し `uv.lock` もコミットする（CI は `--frozen`）
 3. `DRY_RUN=true uv run python -m src.main` で本物のページに対して動作確認し、その後 `data/state.json` を戻す
 4. 終了コードの意味や Healthchecks の送り分けを変えるときは、`src/main.py`・`check-outage.yml`・README の 3 箇所を同時に更新する
-5. push 後、次の実行（最長 30 分以内）が緑になることを Actions で確認する
+5. push 後、次の実行（最長 10 分以内）が緑になることを Actions で確認する
 
 ロールバックは `git revert` で十分。状態ファイルはコードと独立しているため、コードを戻しても通知履歴は壊れない。
 

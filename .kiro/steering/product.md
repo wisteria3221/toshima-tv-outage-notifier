@@ -1,6 +1,6 @@
 # プロダクト概要
 
-としまテレビの障害情報ページ (https://www.toshima.co.jp/trouble/) を定期的に監視し、障害の新規発生やステータス変更を検知してX（Twitter）へ通知する自動監視システム。GitHub Actions 上で約30分ごとに無人実行される（起動は外部 cron が主系、GitHub の `schedule` はフォールバック）。
+としまテレビの障害情報ページ (https://www.toshima.co.jp/trouble/) を定期的に監視し、障害の新規発生やステータス変更を検知してX（Twitter）へ通知する自動監視システム。GitHub Actions 上で約10分ごとに無人実行される（起動は外部 cron が主系、GitHub の `schedule` はフォールバック）。
 
 主な利用者は、としまテレビのインターネット・テレビサービス利用者、および障害情報をフォローしたい地域住民。
 

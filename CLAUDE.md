@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## プロジェクト概要
 
-としまテレビの障害情報ページ (https://www.toshima.co.jp/trouble/) をスクレイピングし、障害の発生やステータス変更時にX（Twitter）へ通知するPythonベースの監視システム。GitHub Actions 上で動作し、外部 cron（cron-job.org）から約30分ごとに起動される。
+としまテレビの障害情報ページ (https://www.toshima.co.jp/trouble/) をスクレイピングし、障害の発生やステータス変更時にX（Twitter）へ通知するPythonベースの監視システム。GitHub Actions 上で動作し、外部 cron（cron-job.org）から約10分ごとに起動される。
 
 ## 開発コマンド
 
@@ -152,16 +152,17 @@ GitHub Actions のみ（シークレット）:
 ## GitHub Actions
 
 **ワークフロー**: [.github/workflows/check-outage.yml](.github/workflows/check-outage.yml)
-- 外部 cron（cron-job.org）から毎時 `:07` `:37` に `workflow_dispatch` で起動するのが主系。`schedule`（毎時 `:22` `:52`）は GitHub 側で間引かれるためフォールバック
+- 外部 cron（cron-job.org）から 10 分ごと（毎時 `:07` `:17` … `:57`）に `workflow_dispatch` で起動するのが主系。`schedule`（毎時 `:52` の 1 時間に 1 回）は GitHub 側で間引かれるためフォールバック
+- 間隔を 10 分より詰めない（障害は 1.5〜3 時間続き 5 分未満の改善は小さい一方、としまテレビ側のサーバー負荷と GitHub の利用規約上のリスクが増える）。変更時は Healthchecks の Period/Grace も合わせる
 - `concurrency: group: check-outage` で重複起動を直列化（state.json の push 衝突防止）
 - Actionsタブから手動実行可能
 - `data/state.json` の変更を `[skip ci]` フラグ付きで自動コミット
 - push が拒否された場合（人が main に push した直後など。`concurrency` は Actions 同士しか直列化しない）は `git pull --rebase` して 1 回だけ再試行する。投稿済みの状態をコミットできないと次回二重投稿になるため
-- 本処理の前に Lint とテストを実行するため、どちらかが失敗すると障害チェック自体が走らない
+- Lint とテストは実行しない（10 分ごとに重複させないため、[lint.yml](.github/workflows/lint.yml) に移した）。依存も本体分のみ（`uv sync --frozen`、dev extras なし）。テストが壊れたコードでも main に入れば障害チェックはそのまま走るので、push 後は lint.yml の結果を確認すること
 - リポジトリ設定でシークレットの設定が必要
 
-**Lint ワークフロー**: [.github/workflows/lint.yml](.github/workflows/lint.yml)
-- push / PR 時に `ruff check` と `ruff format --check` を実行する
+**Lint・テストワークフロー**: [.github/workflows/lint.yml](.github/workflows/lint.yml)
+- push / PR 時に `ruff check` と `ruff format --check`、`pytest` を実行する（別ジョブ）
 - フォーマット差分だけでも失敗するので、コミット前に `uv run ruff format .` を通しておくこと
 
 **Dependabot**: [.github/dependabot.yml](.github/dependabot.yml)

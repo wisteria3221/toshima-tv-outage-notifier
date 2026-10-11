@@ -28,7 +28,7 @@
 
 ### 自動化・運用設定
 **場所**: `.github/`
-**目的**: 障害チェックの実行（`workflows/check-outage.yml`: `schedule` / `workflow_dispatch`、状態コミット、Healthchecks.io への死活報告）・push / PR 時の Lint（`workflows/lint.yml`）・依存更新（`dependabot.yml`、現状は Dev Container の Feature 更新のみ）
+**目的**: 障害チェックの実行（`workflows/check-outage.yml`: `schedule` / `workflow_dispatch`、状態コミット、Healthchecks.io への死活報告）・push / PR 時の Lint・テスト（`workflows/lint.yml`）・依存更新（`dependabot.yml`、現状は Dev Container の Feature 更新のみ）
 
 ### 開発環境定義
 **場所**: `.devcontainer/`

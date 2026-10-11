@@ -112,7 +112,7 @@ DRY_RUN=true uv run python -m src.main
 
 ### GitHub Actions での自動実行
 
-GitHub Actions の `schedule`（毎時 22 分・52 分）と、外部 cron（cron-job.org）からの `workflow_dispatch` 起動（毎時 7 分・37 分）の 2 系統で実行されます。
+GitHub Actions の `schedule`（毎時 52 分）と、外部 cron（cron-job.org）からの `workflow_dispatch` 起動（10 分ごと、毎時 7 分・17 分・…・57 分）の 2 系統で実行されます。
 `schedule` は GitHub 側の都合で遅延・間引きされることがあるため、外部 cron を主系、`schedule` をフォールバックとしています。
 両者が重なっても `concurrency` 設定により直列に実行され、状態ファイルのコミットが衝突することはありません。
 
@@ -132,7 +132,7 @@ GitHub Actions の `schedule`（毎時 22 分・52 分）と、外部 cron（cro
      - `Authorization: Bearer <作成したトークン>`
      - `Accept: application/vnd.github+json`
    - Body: `{"ref":"main"}`
-   - Schedule: 毎時 7 分・37 分
+   - Schedule: 10 分ごと（毎時 7, 17, 27, 37, 47, 57 分）
 3. トークンには有効期限があるため、期限切れ前に更新する。期限切れになると `schedule` のみのフォールバック運用になり、起動頻度が大きく落ちる（後述の Healthchecks.io で検知できる）
 
 cron-job.org の設定確認・変更（実行履歴の確認、トークンの差し替え、スケジュール変更、一時停止など）は、Claude Code 用スキル [.claude/skills/cron-job-org-api/](.claude/skills/cron-job-org-api/) の同梱 CLI でも行えます（API キーは cron-job.org Console の Settings で発行し、環境変数 `CRONJOB_API_KEY` か `.env` に設定。API は 1 日 100 リクエストまで）。
@@ -158,7 +158,7 @@ GitHub Actions の `schedule` はベストエフォートで、高負荷時に�
 起動しなかった実行は履歴に残らないため、Actions タブを見ても気づけません。
 [Healthchecks.io](https://healthchecks.io/)（無料枠あり）に成功時だけ ping を送り、一定時間 ping が途絶えたらアラートを受け取る仕組みを用意しています。
 
-1. Healthchecks.io でチェックを作成し、Period を `30 minutes`、Grace Time を `1 hour` 程度に設定する
+1. Healthchecks.io でチェックを作成し、Period を `10 minutes`（外部 cron の間隔）、Grace Time を `30 minutes` 程度に設定する
 2. 表示された Ping URL（`https://hc-ping.com/<uuid>` 形式）をリポジトリのシークレット `HEALTHCHECKS_URL` に登録する
 3. 通知先（メール、Slack、Discord など）を Healthchecks 側で設定する
 
@@ -175,7 +175,7 @@ gh secret set HEALTHCHECKS_URL --body "$PING_URL"
 
 シークレット未設定の場合、このステップはスキップされます。
 終了コード 2（上流不通）のときは `/log` に記録のみ送り、期限はリセットしません。上流不通が長引いた場合も未起動と同様にアラートされます。
-終了コード 1 や Lint/テスト失敗のときは `/fail` に送るので即時アラートになります。
+終了コード 1 や依存インストール失敗などのときは `/fail` に送るので即時アラートになります。
 
 ## ディレクトリ構成
 
@@ -186,7 +186,7 @@ toshima-tv-outage-notifier/
 ├── .github/
 │   ├── workflows/
 │   │   ├── check-outage.yml   # 障害チェック（schedule / workflow_dispatch）
-│   │   └── lint.yml           # push / PR 時の Ruff チェック
+│   │   └── lint.yml           # push / PR 時の Ruff チェックとテスト
 │   └── dependabot.yml         # Dev Container / GitHub Actions / Python 依存の週次更新
 ├── .kiro/                     # SDD（仕様駆動開発）の steering / specs
 ├── src/

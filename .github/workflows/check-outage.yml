@@ -3,9 +3,9 @@ name: Check Toshima TV Outage
 on:
   schedule:
     # GitHub の schedule はベストエフォートで、実績では 1 日 4〜7 回しか起動しない期間があった。
-    # 主系は外部 cron（cron-job.org）から 7,37 分に workflow_dispatch を呼ぶ構成とし、
-    # ここは分をずらしたフォールバック。混雑しやすい 0 分も避ける。
-    - cron: '22,52 * * * *'
+    # 主系は外部 cron（cron-job.org）から 10 分ごと（7,17,...,57 分）に workflow_dispatch を呼ぶ構成とし、
+    # ここは外部 cron が止まったときのための 1 時間に 1 回のフォールバック。主系と分をずらし、混雑しやすい 0 分も避ける。
+    - cron: '52 * * * *'
   workflow_dispatch:  # 手動実行および外部 cron からの起動用
 
 permissions:
@@ -36,14 +36,10 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
 
+      # Lint とテストは push / PR 時に lint.yml で実行する（10 分ごとの定期実行では重複させない）。
+      # 実行に必要なのは本体の依存だけなので dev extras は入れない。
       - name: Install dependencies
-        run: uv sync --frozen --all-extras
-
-      - name: Lint
-        run: uv run ruff check .
-
-      - name: Run tests
-        run: uv run pytest -v
+        run: uv sync --frozen
 
       - name: Run outage checker
         id: checker
@@ -90,7 +86,7 @@ jobs:
       # 死活報告（dead-man's switch）。常に実行し、結果に応じて送り先を変える。
       #   成功(0)      → 通常 ping（Healthchecks の期限をリセット）
       #   上流不通(2)  → /log（記録のみ。期限はリセットしないので、長引けば未起動と同様にアラート）
-      #   それ以外     → /fail（即時アラート。Lint/テスト失敗で exit_code が空の場合も含む）
+      #   それ以外     → /fail（即時アラート。依存インストール失敗などで exit_code が空の場合も含む）
       - name: Report to Healthchecks.io
         if: always() && env.HEALTHCHECKS_URL != ''
         env:

@@ -17,7 +17,7 @@ $CJ history list <jobId> --table --tz Asia/Tokyo --limit 20
 - **401**: GitHub トークンの期限切れや失効 → レシピ 2
 - **403**: トークンの権限不足（`Actions: Read and write` が無い）、またはリポジトリの対象外
 - **404 / 422**: URL のワークフローファイル名、または本文の `ref` の誤り
-- 予定時刻（`PLANNED`）が `:07` / `:37` で、`JITTER` が数秒以内なら外部 cron 自体は正常
+- 予定時刻（`PLANNED`）が `:07` / `:17` / … / `:57` で、`JITTER` が数秒以内なら外部 cron 自体は正常
 
 詳細なエラーメッセージは `history get <jobId> <identifier>` の `body` で読める。ただし本文が残るのはジョブの `saveResponses` が true の場合だけ。無ければ `jobs update <jobId> --save-responses` を有効にして次の実行を待つ。
 
@@ -34,7 +34,7 @@ $CJ jobs update <jobId> --header "Authorization: Bearer $NEW_GITHUB_TOKEN"
 $CJ jobs get <jobId>      # Authorization が "Bearer gith…****" になっているか、Accept/本文が残っているか
 ```
 
-次の `:07` / `:37` の後に `history list` で 204 になったことを確認する。
+次の実行（10 分ごと）の後に `history list` で 204 になったことを確認する。
 
 ## 3. 失敗したらメールで知らせる
 
@@ -49,13 +49,13 @@ $CJ jobs update <jobId> --notify-failure --notify-failure-count 2 --notify-succe
 ## 4. スケジュールを変える
 
 ```bash
-# 毎時 7 分・37 分（日本時間）
-$CJ jobs update <jobId> --cron '7,37 * * * *' --timezone Asia/Tokyo --dry-run
+# 10 分ごと、毎時 7, 17, …, 57 分（日本時間）
+$CJ jobs update <jobId> --cron '7,17,27,37,47,57 * * * *' --timezone Asia/Tokyo --dry-run
 # 変更後、次回実行予定で確認
 $CJ history list <jobId> --table --tz Asia/Tokyo --limit 1
 ```
 
-GitHub Actions の `schedule`（毎時 22 分・52 分）と重ならないよう、15 分ずらす運用にしている。変えるときは README と CLAUDE.md の記述も合わせて更新する。
+GitHub Actions の `schedule`（毎時 52 分のフォールバック）と重ならないよう分をずらしている。変えるときは README と CLAUDE.md の記述、Healthchecks の Period / Grace も合わせて更新する。
 
 ## 5. メンテナンス中に一時停止する
 
@@ -77,7 +77,7 @@ $CJ jobs create \
   --header "Authorization: Bearer $GITHUB_TOKEN" \
   --header "Accept: application/vnd.github+json" \
   --body '{"ref":"main"}' \
-  --cron '7,37 * * * *' --timezone Asia/Tokyo \
+  --cron '7,17,27,37,47,57 * * * *' --timezone Asia/Tokyo \
   --notify-failure --notify-failure-count 2 \
   --enable --dry-run
 ```
