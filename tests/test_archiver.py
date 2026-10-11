@@ -51,7 +51,7 @@ def no_sleep(mocker, fake_clock):
             raise AssertionError("ポーリングが上限回数を超えて続いています")
         fake_clock.sleep(seconds)
 
-    return mocker.patch("time.sleep", side_effect=_sleep)
+    return mocker.patch("src.archiver.sleep", side_effect=_sleep)
 
 
 @pytest.fixture
@@ -135,6 +135,45 @@ class TestWaybackArchiver:
         # 無効時はセッションに認証ヘッダを持たない
         assert "Authorization" not in archiver.session.headers
 
+    @pytest.mark.parametrize(
+        "access_key, secret_key",
+        [(ACCESS_KEY, "bad\nsecret"), ("bad\tkey", SECRET_KEY), ("キー", SECRET_KEY)],
+        ids=["newline-in-secret", "tab-in-access", "non-ascii"],
+    )
+    @responses_lib.activate
+    def test_disabled_with_unsafe_credentials(
+        self, monkeypatch, caplog, access_key, secret_key
+    ):
+        """ヘッダにできない文字を含む認証情報なら無効化し、値をログに出さないこと
+
+        そのままヘッダにすると requests が拒否し、例外メッセージにキーの値が載って
+        Actions のログに漏れるため。
+        """
+        monkeypatch.setenv("WAYBACK_ACCESS_KEY", access_key)
+        monkeypatch.setenv("WAYBACK_SECRET_KEY", secret_key)
+        with caplog.at_level(logging.DEBUG):
+            archiver = WaybackArchiver()
+            assert archiver.enabled is False
+            assert archiver.archive(TARGET_URL) is None
+        warnings = _warnings(caplog)
+        assert len(warnings) == 1
+        assert "制御文字" in warnings[0].getMessage()
+        assert access_key not in caplog.text
+        assert secret_key not in caplog.text
+        assert "Authorization" not in archiver.session.headers
+        assert len(responses_lib.calls) == 0
+
+    def test_trailing_newline_in_credentials_is_stripped(self, monkeypatch):
+        """末尾の改行（gh secret set に echo で渡した場合など）は取り除いて有効にすること"""
+        monkeypatch.setenv("WAYBACK_ACCESS_KEY", f"{ACCESS_KEY}\r\n")
+        monkeypatch.setenv("WAYBACK_SECRET_KEY", f" {SECRET_KEY}\n")
+        archiver = WaybackArchiver()
+        assert archiver.enabled is True
+        assert (
+            archiver.session.headers["Authorization"]
+            == f"LOW {ACCESS_KEY}:{SECRET_KEY}"
+        )
+
     def test_context_manager_closes_session(self, wayback_credentials, mocker):
         """with ブロックを抜けるとセッションが閉じられること"""
         with WaybackArchiver() as archiver:
@@ -183,8 +222,8 @@ class TestArchive:
             "js_behavior_timeout": ["0"],
             "if_not_archived_within": [str(WAYBACK_IF_NOT_ARCHIVED_WITHIN)],
         }
-        # 即座に success なら待機しない
-        no_sleep.assert_not_called()
+        # 保存要求の直後はほぼ pending なので、最初の問い合わせの前に 1 回だけ待つ
+        no_sleep.assert_called_once_with(WAYBACK_POLL_INTERVAL)
 
     @responses_lib.activate
     def test_polls_with_same_auth_header(self, archiver):
@@ -220,7 +259,9 @@ class TestSubmitFailures:
             assert archiver.archive(TARGET_URL) == ARCHIVED_URL
         assert _warnings(caplog) == []
         assert any("再試行" in r.getMessage() for r in caplog.records)
-        no_sleep.assert_called_once_with(WAYBACK_SUBMIT_RETRY_WAIT)
+        # 保存要求の再試行の待機 → 最初の問い合わせ前の待機
+        waits = [c.args[0] for c in no_sleep.call_args_list]
+        assert waits == [WAYBACK_SUBMIT_RETRY_WAIT, WAYBACK_POLL_INTERVAL]
         assert len(responses_lib.calls) == 3
 
     @responses_lib.activate
@@ -345,9 +386,11 @@ class TestWaitForCaptureFailures:
         assert len(warnings) == 1
         assert "時間切れ" in warnings[0].getMessage()
         assert TARGET_URL in warnings[0].getMessage()
-        # 待機の合計が上限を超える手前で諦める（待ってから判定すると間隔ぶん超過する）
-        polls = WAYBACK_TIMEOUT // WAYBACK_POLL_INTERVAL
-        assert no_sleep.call_count == polls - 1
+        assert f"1 件の上限 {WAYBACK_TIMEOUT} 秒" in warnings[0].getMessage()
+        # 待機の合計が上限を超える手前で諦める（待ってから判定すると間隔ぶん超過する）。
+        # 問い合わせの前に毎回待つので、待機回数と問い合わせ回数は等しい
+        polls = WAYBACK_TIMEOUT // WAYBACK_POLL_INTERVAL - 1
+        assert no_sleep.call_count == polls
         assert len(responses_lib.calls) == 1 + polls
 
     @responses_lib.activate
@@ -360,10 +403,13 @@ class TestWaitForCaptureFailures:
         deadline = fake_clock.now + WAYBACK_POLL_INTERVAL * 2 + 1
         with caplog.at_level(logging.WARNING):
             assert archiver.archive(TARGET_URL, deadline=deadline) is None
-        assert "時間切れ" in _warnings(caplog)[0].getMessage()
-        # 0 秒・5 秒で問い合わせ、10 秒の問い合わせの後は期限に収まらないので待たない
+        message = _warnings(caplog)[0].getMessage()
+        assert "時間切れ" in message
+        # どちらの期限で打ち切ったかを出す
+        assert "実行全体の時間予算" in message
+        # 5 秒・10 秒で問い合わせ、その次の待機は期限に収まらないので待たない
         assert no_sleep.call_count == 2
-        assert len(responses_lib.calls) == 1 + 3
+        assert len(responses_lib.calls) == 1 + 2
         assert fake_clock.now < deadline
 
     @responses_lib.activate
@@ -380,7 +426,8 @@ class TestWaitForCaptureFailures:
         assert archiver.archive(TARGET_URL, deadline=fake_clock.now + remaining)
 
         assert post.call_args.kwargs["timeout"] == remaining
-        assert get.call_args.kwargs["timeout"] == remaining
+        # 問い合わせは最初の待機の後なので、その分だけ短くなる
+        assert get.call_args.kwargs["timeout"] == remaining - WAYBACK_POLL_INTERVAL
 
     @responses_lib.activate
     def test_request_timeout_defaults_to_request_timeout(self, archiver, mocker):
@@ -417,7 +464,7 @@ class TestWaitForCaptureFailures:
             assert archiver.archive(TARGET_URL) == ARCHIVED_URL
         assert _warnings(caplog) == []
         assert any("再試行" in r.getMessage() for r in caplog.records)
-        no_sleep.assert_called_once()
+        assert no_sleep.call_count == 2
         assert len(responses_lib.calls) == 3
 
     @responses_lib.activate
@@ -461,7 +508,8 @@ class TestWaitForCaptureFailures:
         warnings = _warnings(caplog)
         assert len(warnings) == 1
         assert "時間切れ" in warnings[0].getMessage()
-        no_sleep.assert_not_called()
+        # 最初の問い合わせ前の 1 回だけ。その後は期限に収まらないので待たない
+        no_sleep.assert_called_once()
         assert len(responses_lib.calls) == 2
 
     @responses_lib.activate
@@ -488,7 +536,8 @@ class TestWaitForCaptureFailures:
         assert len(warnings) == 1
         assert "404" in warnings[0].getMessage()
         assert "job not found" in warnings[0].getMessage()
-        no_sleep.assert_not_called()
+        # 最初の問い合わせ前の 1 回だけで、再試行のための待機はしない
+        no_sleep.assert_called_once()
         assert len(responses_lib.calls) == 2
 
     @responses_lib.activate

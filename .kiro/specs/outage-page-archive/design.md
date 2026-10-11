@@ -175,7 +175,7 @@ sequenceDiagram
 
 - **順序の決定**: 魚拓は全通知の後。ツイートを魚拓の待ち時間（最大 120 秒/件）で遅らせない。巻き戻しの直後に一度 `save_state()` してから魚拓に入り、魚拓中にプロセスが落ちても投稿済みのマークとカウンタを失わないようにする。魚拓の後の `save_state()` は記録が無ければ dirty でないので書き込まない。`"failed"` の件は魚拓の対象に含めないので、記録が巻き戻しで消えることはない
 - **ゲーティング**: `main` は対象が 0 件なら archiver を生成せず、DRY RUN なら archiver を生成せずに対象 URL をログに出して終える（認証情報の有無より先に判定する）。`archive()` 自身は先頭で「無効（認証情報なし）」だけを判定して None を返し、DRY RUN は知らない（判定を main に集約する）。無効時の警告は archiver 生成時に 1 回だけ出す
-- **時間上限**: `archive()` の開始から `WAYBACK_TIMEOUT` 秒（`main` から実行全体の期限 `deadline` が渡されればその早い方）を deadline とし、保存要求の再試行も完了確認もこの deadline の中で行う。`WAYBACK_POLL_INTERVAL` 秒ごとにステータスを問い合わせ、問い合わせ自体の通信エラー・5xx・408/429・非 JSON は一時的な失敗として deadline まで問い合わせを続ける（ジョブは Wayback 側で動き続けているため）。それ以外の 4xx（401/403/404）は再試行しても変わらないので即座に失敗にし、HTTP ステータスを警告に出す。deadline 超過は失敗（None、WARNING「時間切れ」）。各 HTTP 要求のタイムアウトは `REQUEST_TIMEOUT` と deadline までの残り時間の小さい方にし、deadline を超えてブロックしない
+- **時間上限**: `archive()` の開始から `WAYBACK_TIMEOUT` 秒（`main` から実行全体の期限 `deadline` が渡されればその早い方）を deadline とし、保存要求の再試行も完了確認もこの deadline の中で行う。`WAYBACK_POLL_INTERVAL` 秒ごとにステータスを問い合わせ（保存要求の直後はほぼ pending なので最初の問い合わせの前にも待つ）、問い合わせ自体の通信エラー・5xx・408/429・非 JSON は一時的な失敗として deadline まで問い合わせを続ける（ジョブは Wayback 側で動き続けているため）。それ以外の 4xx（401/403/404）は再試行しても変わらないので即座に失敗にし、HTTP ステータスを警告に出す。deadline 超過は失敗（None、WARNING「時間切れ」にどちらの期限で打ち切ったかを付ける）。各 HTTP 要求のタイムアウトは `REQUEST_TIMEOUT` と deadline までの残り時間の小さい方にする（requests の timeout は接続と読み取りに別々に効くので、超過は最大 1 要求ぶんに収まる）
 - **保存要求の再試行**: POST の 5xx・408/429・通信エラー・非 JSON は `WAYBACK_SUBMIT_RETRY_WAIT` 秒後に 1 回だけ再試行する（SPN2 は過負荷時に 503 や HTML を返す）。それ以外の 4xx と `job_id` なしの応答は再試行しない
 - **実行全体の時間予算**: `main` は魚拓フェーズの開始から `WAYBACK_RUN_BUDGET` 秒を超えたら残りの件を失敗として数えて諦める。対象が多い実行（状態ファイルの作り直し直後など）で実行時間が数十分に延び、Healthchecks の猶予を超えて誤報になるのを防ぐ。通知済みの状態は魚拓の前に保存済みなので通知には影響しない
 
@@ -273,7 +273,7 @@ class WaybackArchiver:
 ```
 - Preconditions: `url` は絶対 URL（`OutageInfo.url` は `urljoin` 済み）
 - Postconditions: 戻り値が str のとき、その URL は Wayback 上で解決できる。None のとき WARNING（無効時は生成時の 1 回のみ）が出ている
-- Invariants: 1 回の `archive()` の所要時間は `WAYBACK_TIMEOUT` 秒（`deadline` が渡されればそれまでの残り時間）を超えない。例外を送出しない
+- Invariants: 1 回の `archive()` の所要時間は `WAYBACK_TIMEOUT` 秒（`deadline` が渡されればそれまでの残り時間）に、最大 1 要求ぶんの超過（`REQUEST_TIMEOUT` 以下）を加えた時間を超えない。例外を送出しない。認証情報の値は前後の空白を除き、ヘッダにできない文字が残れば無効化する（値はログに出さない）
 
 ##### API Contract（Wayback SPN2、外部）
 | Method | Endpoint | Request | Response | Errors |
@@ -281,13 +281,13 @@ class WaybackArchiver:
 | POST | `https://web.archive.org/save` | ヘッダ `Accept: application/json`、`Authorization: LOW key:secret`。フォーム `url`, `skip_first_archive=1`, `js_behavior_timeout=0`, `if_not_archived_within=60` | `{"url": ..., "job_id": "..."}` | 401（認証不正）、429（レート制限）、`job_id` 欠落で `{"message": ...}` |
 | GET | `https://web.archive.org/save/status/<job_id>` | 同じヘッダ | `{"status": "pending"}` / `{"status": "success", "timestamp": "YYYYMMDDHHMMSS", "original_url": ...}` / `{"status": "error", "status_ext": "error:...", "message": ...}` | 5xx、非 JSON |
 
-- `if_not_archived_within=60`: 既定の 1 時間では新規検出から 1 時間以内の復旧で古いキャプチャが返るため、実行間隔（10 分）より短い値で毎回新しいキャプチャを作る
+- `if_not_archived_within=60`: 既定の 45 分では新規検出から 45 分以内の復旧で古いキャプチャが返るため、実行間隔（10 分）より短い値で毎回新しいキャプチャを作る
 - `capture_all` は付けない。詳細ページが 404 のときは `error:not-found` で失敗にし、エラーページを記録しない
 - 公開 URL は `https://web.archive.org/web/{timestamp}/{url}`（`url` は送信した詳細 URL）
 
 **Implementation Notes**
 - Integration: `main` は魚拓の対象（`"sent"` / `"skipped"`）が 1 件以上あるときだけ archiver を生成する（全件 `"failed"` の実行では生成しない）。`with` で使いセッションを閉じる
-- Validation: `responses` で POST / GET をモックし、conftest の `fake_clock`（`time.monotonic` の偽の時計）と、待機した秒数だけそれを進める `no_sleep` で時間切れを再現する。`get_wayback_credentials` は `monkeypatch.setenv` で与える
+- Validation: `responses` で POST / GET をモックし、conftest の `fake_clock`（`src.archiver.monotonic` / `src.main.monotonic` を差し替える偽の時計）と、`src.archiver.sleep` を差し替えて待機した秒数だけそれを進める `no_sleep` で時間切れを再現する。`get_wayback_credentials` は `monkeypatch.setenv` で与える
 - Risks: SPN2 の過負荷（`error:cannot-fetch`, `error:user-session-limit`）は失敗として扱うだけ。実行時間は 1 件最大 120 秒延びうる。保存要求が受理されたのに応答が届かず再試行した場合は同じページに 2 件目のジョブが入りうる（セッション枠を 1 つ余分に使うだけで記録は 2 件目の結果になる。許容）
 
 ### 状態管理

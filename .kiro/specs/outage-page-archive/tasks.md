@@ -78,7 +78,7 @@
 
 ## Implementation Notes
 - 2.1: `_wait_for_capture` の上限判定は「次の待機が終わる前に上限を超えるか」で行う（待機後に判定すると 1 件の所要時間が `WAYBACK_POLL_INTERVAL` ぶん超過する）。テストでは autouse の `no_sleep` が待機回数に上限を設けており、上限判定が壊れてもハングせず失敗する。
-- 2.1: 期限の判定は conftest の `fake_clock`（`time.monotonic` の偽の時計）で試す。`no_sleep` は待機した秒数だけ時計を進める。`time.monotonic` を固定の並びで返すモックにすると計測箇所が増えたときに StopIteration で壊れるので使わない。
+- 2.1: 期限の判定は conftest の `fake_clock`（`src.archiver.monotonic` / `src.main.monotonic` を差し替える偽の時計）で試す。`no_sleep` は `src.archiver.sleep` を差し替え、待機した秒数だけ時計を進める。`time.monotonic` 自体は差し替えない（他のライブラリの時計まで止まる）。完了確認は最初の問い合わせの前にも待つので、待機回数と問い合わせ回数は等しい。`time.monotonic` を固定の並びで返すモックにすると計測箇所が増えたときに StopIteration で壊れるので使わない。
 - 2.1: 1 件の期限は `archive()` の開始から `WAYBACK_TIMEOUT` 秒（main から渡された実行全体の期限があれば早い方）。各 HTTP 要求のタイムアウトも残り時間に切り詰めるので、期限を超えてブロックしない。
 - 2.2: `schema_version` は読み込んだ値が現行より旧いときだけメモリ上で現行にする（新しい版数は残す）。既存の `data/state.json` の `schema_version` は読み込み時にファイルへは書き換えない（変更のない実行まで dirty になるため）。ファイルを自己記述的に保ちたい場合は、cron-job.org を停止しラン無しを確認した上で `"1.2"` に手で揃える（前回 1.0→1.1 と同じ運用）。
 - 3.1: archiver の `archive()` は DRY RUN でも失敗でも None を返すため、main 側で `DRY_RUN` を見て DRY RUN を「試行 0 件」として扱う（失敗に数えると DRY RUN のたびに WARNING サマリが出る）。tests/test_main.py は autouse で `src.main.WaybackArchiver` をモックしており、本物の archiver を使うテストは個別に再パッチする。

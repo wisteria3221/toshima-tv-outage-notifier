@@ -2,10 +2,12 @@
 
 import logging
 import sys
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
+
+# テストで偽の時計に差し替えられるよう、このモジュールの名前で参照する（archiver と同じ）
+from time import monotonic
 from typing import Literal
 
 from .archiver import WaybackArchiver
@@ -162,15 +164,16 @@ def _archive_outages(
 
     success_count = 0
     failure_count = 0
+    archiver: WaybackArchiver | None = None
     try:
         with WaybackArchiver() as archiver:
             if not archiver.enabled:
                 # 認証情報なしの警告は生成時に 1 回出ている。試行 0 件として扱い、
                 # 件数サマリは出さない
                 return 0, 0
-            deadline = time.monotonic() + WAYBACK_RUN_BUDGET
+            deadline = monotonic() + WAYBACK_RUN_BUDGET
             for index, item in enumerate(targets):
-                if time.monotonic() >= deadline:
+                if monotonic() >= deadline:
                     remaining = len(targets) - index
                     logger.warning(
                         f"魚拓の時間予算（{WAYBACK_RUN_BUDGET} 秒）を超えたため、"
@@ -196,9 +199,12 @@ def _archive_outages(
                 success_count += 1
                 logger.info(f"魚拓を取得しました: {item.description} -> {archived_url}")
     except Exception:
-        # archiver の生成やセッションの後始末で例外が出た場合。まだ成功していない件を
-        # すべて失敗として数える
+        # archiver の生成やセッションの後始末で例外が出た場合
         logger.exception("魚拓の処理で予期しない例外が発生しました")
+        if archiver is not None and not archiver.enabled:
+            # 無効な archiver は要求を送っていないので、後始末の例外でも試行 0 件のまま
+            return 0, 0
+        # まだ成功していない件をすべて失敗として数える
         failure_count = len(targets) - success_count
     return success_count, failure_count
 

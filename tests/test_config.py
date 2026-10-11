@@ -66,6 +66,13 @@ class TestGetWaybackCredentials:
 
         assert config.get_wayback_credentials() == ("", "")
 
+    def test_strips_surrounding_whitespace(self, monkeypatch):
+        """前後の空白・改行を取り除くこと（ヘッダに改行が入ると値がログに漏れるため）"""
+        monkeypatch.setenv("WAYBACK_ACCESS_KEY", " access\r\n")
+        monkeypatch.setenv("WAYBACK_SECRET_KEY", "secret\n")
+
+        assert config.get_wayback_credentials() == ("access", "secret")
+
     def test_reads_at_call_time(self, monkeypatch):
         """import 時ではなく呼び出し時に環境変数を読むこと（テストで差し替え可能）"""
         monkeypatch.setenv("WAYBACK_ACCESS_KEY", "first")

@@ -45,12 +45,13 @@ WAYBACK_SAVE_URL = "https://web.archive.org/save"
 # これより短くしても早く終わらず SPN2 側への問い合わせ回数だけ増える。
 WAYBACK_POLL_INTERVAL = 5
 # 1 件の魚拓に費やす時間の上限（秒）。保存要求（再試行を含む）から完了確認までを
-# 通して数え、個々の HTTP タイムアウトも残り時間に切り詰めるので、この値を超えない。
+# 通して数え、個々の HTTP タイムアウトも残り時間に切り詰める（requests の timeout は
+# 接続と読み取りに別々に効くため、最大 REQUEST_TIMEOUT 程度は超過しうる）。
 # SPN2 の 1 件あたりの最大所要時間（約 2 分）に合わせる。超えたら諦めて None
 # （魚拓なし）とし、通知処理を止めない。
 WAYBACK_TIMEOUT = 120
 # この秒数内に取られた既存キャプチャは流用せず新規に取る（秒）。
-# SPN2 の既定（1 時間）のままだと、新規検出から 1 時間以内に復旧した場合に
+# SPN2 の既定（45 分）のままだと、新規検出から 45 分以内に復旧した場合に
 # 検出時の古いキャプチャが返り、復旧後の内容が残らない。実行間隔（10 分）より
 # 短くして、変更を検出するたびに新しいキャプチャを作る。
 WAYBACK_IF_NOT_ARCHIVED_WITHIN = 60
@@ -92,9 +93,12 @@ def get_wayback_credentials() -> tuple[str, str]:
     """Wayback Machine の認証情報を環境変数から取得
 
     (アクセスキー, シークレットキー) の順で返す。未設定は空文字。
+    前後の空白・改行は取り除く（`echo $KEY | gh secret set` や CRLF の .env で末尾に
+    改行が付くことがあり、そのまま HTTP ヘッダにすると拒否される上、その例外メッセージに
+    キーの値が含まれてログに漏れる）。
     get_x_credentials() と同じく呼び出し時に読むので、テストで monkeypatch できる。
     """
     return (
-        os.environ.get("WAYBACK_ACCESS_KEY", ""),
-        os.environ.get("WAYBACK_SECRET_KEY", ""),
+        os.environ.get("WAYBACK_ACCESS_KEY", "").strip(),
+        os.environ.get("WAYBACK_SECRET_KEY", "").strip(),
     )

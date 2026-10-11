@@ -62,13 +62,15 @@ class FakeClock:
 
 @pytest.fixture
 def fake_clock(mocker):
-    """time.monotonic を偽の時計に差し替える（time.sleep は差し替えない）
+    """main と archiver が参照する monotonic を偽の時計に差し替える（sleep は差し替えない）
 
-    期限の判定を試すテストで使う。待機も省きたいテストは time.sleep を clock.sleep に
-    別途差し替える（test_archiver の no_sleep を参照）。
+    期限の判定を試すテストで使う。time.monotonic 自体は差し替えない（他のライブラリの
+    タイムアウトまで偽の時計で動いてしまうため）。待機も省きたいテストは各モジュールの
+    sleep を clock.sleep に別途差し替える（test_archiver の no_sleep を参照）。
     """
     clock = FakeClock()
-    mocker.patch("time.monotonic", clock.monotonic)
+    mocker.patch("src.archiver.monotonic", clock.monotonic)
+    mocker.patch("src.main.monotonic", clock.monotonic)
     return clock
 
 

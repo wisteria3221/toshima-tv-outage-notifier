@@ -642,6 +642,23 @@ class TestArchiveIntegration:
 
         archiver_class.assert_not_called()
 
+    def test_cleanup_error_of_disabled_archiver_is_not_counted_as_failure(
+        self, mocker, state_file, fetch, allow_sending, archiver, sample_outage, caplog
+    ):
+        """無効な archiver の後始末で例外が出ても、試行 0 件として失敗に数えないこと"""
+        fetch.return_value = [sample_outage]
+        mocker.patch("src.main.XNotifier._post_tweet", return_value=True)
+        archiver.enabled = False
+        archiver.__exit__.side_effect = RuntimeError("close failed")
+
+        with caplog.at_level(logging.INFO):
+            assert main() == 0
+
+        archiver.archive.assert_not_called()
+        messages = [r.getMessage() for r in caplog.records]
+        assert "魚拓の処理で予期しない例外が発生しました" in messages
+        assert not any(m.startswith("魚拓を ") for m in messages)
+
     def test_archiver_is_not_created_when_all_notifications_fail(
         self, mocker, fetch, allow_sending, archiver_class, sample_outage
     ):

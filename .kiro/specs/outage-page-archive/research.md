@@ -27,13 +27,13 @@
 - **Sources Consulted**: 上記 SPN2 Public API Docs
 - **Findings**:
   - 保存要求: `POST https://web.archive.org/save`、ヘッダ `Accept: application/json`・`Authorization: LOW key:secret`、フォーム `url=<対象>`。応答 `{"url": ..., "job_id": "..."}`。失敗時は `{"message": "..."}` のみのことがある
-  - 任意パラメータ（値は `1` のみ有効）: `skip_first_archive=1`（初回判定を省いて高速化）、`js_behavior_timeout=0`（JS 動作を省略、静的ページ向け）、`if_not_archived_within=<秒>`（直近キャプチャがこの時間内なら新規作成せず既存を返す。既定 1 時間）、`capture_all=1`（4xx/5xx でも保存。既定は 200 のみ）
+  - 任意パラメータ（値は `1` のみ有効）: `skip_first_archive=1`（初回判定を省いて高速化）、`js_behavior_timeout=0`（JS 動作を省略、静的ページ向け）、`if_not_archived_within=<秒>`（直近キャプチャがこの時間内なら新規作成せず既存を返す。既定 45 分）、`capture_all=1`（4xx/5xx でも保存。既定は 200 のみ）
   - ステータス: `GET https://web.archive.org/save/status/<job_id>`（同じ認証ヘッダ）。`status` は `pending` / `success` / `error`。`success` 時に `timestamp`（`YYYYMMDDHHMMSS`）と `original_url`。`error` 時に `status_ext`（例 `error:not-found`, `error:too-many-requests`, `error:user-session-limit`）と `message`
   - 公開 URL: `https://web.archive.org/web/<timestamp>/<original_url>`
   - 制限: 認証ユーザーは 7 キャプチャ/分、同一 URL は 10 キャプチャ/日、1 キャプチャの最大所要時間 2 分、対象サーバーの接続タイムアウト 10 秒、ステータス保持は要求後約 1 時間
 - **Implications**:
   - 完了確認は同期的なポーリングで行い、上限 120 秒（SPN2 側の最大所要時間と同じ）で打ち切る
-  - `if_not_archived_within` は既定の 1 時間のままだと「新規検出から 1 時間以内の復旧」で古いキャプチャが返り、復旧後の内容が残らない。実行間隔（10 分）より短い 60 秒を指定して、変更検出のたびに新しいキャプチャを作る
+  - `if_not_archived_within` は既定の 45 分のままだと「新規検出から 45 分以内の復旧」で古いキャプチャが返り、復旧後の内容が残らない。実行間隔（10 分）より短い 60 秒を指定して、変更検出のたびに新しいキャプチャを作る
   - `capture_all` は指定しない。詳細ページが削除され 404 になった場合は失敗として扱い、記録を残さない（エラーページを魚拓にしても意味がない）
   - 同一 URL 10 回/日の制限は、1 障害あたり多くても数回（新規 + ステータス変更数）なので問題にならない
 
