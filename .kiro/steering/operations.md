@@ -20,7 +20,7 @@ GitHub schedule（フォールバック）──┘        │
 | 経路 | 役割 | 止まったときの見え方 |
 |---|---|---|
 | 外部 cron（10 分ごと、毎時 7, 17, …, 57 分） | 主系。GitHub の Fine-grained PAT で dispatch | 起動回数が `schedule` 分だけに落ちる → Healthchecks の期限切れで検知 |
-| `schedule`（毎時 52 分、1 時間に 1 回） | フォールバック。GitHub 側で間引かれる前提 | 単独では検知不能。履歴に残らない |
+| `schedule`（毎時 27 分、1 時間に 1 回。主系と同じ分） | フォールバック。GitHub 側で間引かれる前提 | 単独では検知不能。履歴に残らない |
 | Healthchecks.io | dead-man's switch。Period 10 分 / Grace 30 分 | ping 途絶で通知先にアラート |
 
 - `concurrency: group: check-outage` で直列化しているため、2 経路が重なっても state.json の push は衝突しない。「待機中のラン」が見えるのは正常

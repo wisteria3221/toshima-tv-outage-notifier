@@ -55,7 +55,7 @@ $CJ jobs update <jobId> --cron '7,17,27,37,47,57 * * * *' --timezone Asia/Tokyo 
 $CJ history list <jobId> --table --tz Asia/Tokyo --limit 1
 ```
 
-GitHub Actions の `schedule`（毎時 52 分のフォールバック）と重ならないよう分をずらしている。変えるときは README と CLAUDE.md の記述、Healthchecks の Period / Grace も合わせて更新する。
+GitHub Actions の `schedule`（毎時 27 分のフォールバック）は主系と同じ分に揃えている（ずらすと 10 分未満の間隔で取得してしまう）。変えるときは `schedule` 側の分も合わせ、 README と CLAUDE.md の記述、Healthchecks の Period / Grace も合わせて更新する。
 
 ## 5. メンテナンス中に一時停止する
 

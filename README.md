@@ -112,7 +112,7 @@ DRY_RUN=true uv run python -m src.main
 
 ### GitHub Actions での自動実行
 
-GitHub Actions の `schedule`（毎時 52 分）と、外部 cron（cron-job.org）からの `workflow_dispatch` 起動（10 分ごと、毎時 7 分・17 分・…・57 分）の 2 系統で実行されます。
+GitHub Actions の `schedule`（毎時 27 分）と、外部 cron（cron-job.org）からの `workflow_dispatch` 起動（10 分ごと、毎時 7 分・17 分・…・57 分）の 2 系統で実行されます。
 `schedule` は GitHub 側の都合で遅延・間引きされることがあるため、外部 cron を主系、`schedule` をフォールバックとしています。
 両者が重なっても `concurrency` 設定により直列に実行され、状態ファイルのコミットが衝突することはありません。
 

@@ -117,6 +117,7 @@ npx cc-sdd@latest --claude-skills --lang ja
 - システムは安全マージンとして月450ツイートに制限（`MONTHLY_TWEET_LIMIT`、Free枠500の90%）
 - しきい値は定数化（`_RATE_LIMIT_CRITICAL_RATIO=0.96`, `_RATE_LIMIT_REDUCED_RATIO=0.90`）
 - 90%以上使用時: 新規障害のみ通知し、ステータス変更は**破棄**する（`"skipped"`。`update_outages()` で新ステータスが保存されるため、翌月カウンタがリセットされても再検出されない。README の「翌月に遡って通知されることはない」はこの仕様）。96% のしきい値も現状は同じ挙動で、将来の段階的制限用に分けてある
+- 上限（450 件）到達時: 新規障害も**破棄**する。`update_outages()` で state に登録されるため、翌月カウンタがリセットされても再検出・通知されない。障害は数時間で収束するためリアルタイム性を優先し、遡って通知しないのが意図した仕様。レビューで「取りこぼし」として指摘しないこと
 - 送信可否は `can_send_notification()`、変更種別ごとの絞り込みは `should_notify_change()` を参照。どちらも `_process_notification()` で **1 件ごと**に評価する（ループ前の `can_send_notification()` は早期終了用。1 回の実行で複数件送るとカウンタが進むため、件ごとに見ないと上限を超える）
 
 ### 変更検出ロジック
@@ -152,7 +153,7 @@ GitHub Actions のみ（シークレット）:
 ## GitHub Actions
 
 **ワークフロー**: [.github/workflows/check-outage.yml](.github/workflows/check-outage.yml)
-- 外部 cron（cron-job.org）から 10 分ごと（毎時 `:07` `:17` … `:57`）に `workflow_dispatch` で起動するのが主系。`schedule`（毎時 `:52` の 1 時間に 1 回）は GitHub 側で間引かれるためフォールバック
+- 外部 cron（cron-job.org）から 10 分ごと（毎時 `:07` `:17` … `:57`）に `workflow_dispatch` で起動するのが主系。`schedule`（毎時 `:27` の 1 時間に 1 回）は GitHub 側で間引かれるためフォールバック。主系と同じ分に揃えてある（ずらすと主系稼働中に 10 分未満の間隔で取得してしまう。重なっても `concurrency` で直列化され 2 本目は変更なしで終わる）
 - 間隔を 10 分より詰めない（障害は 1.5〜3 時間続き 5 分未満の改善は小さい一方、としまテレビ側のサーバー負荷と GitHub の利用規約上のリスクが増える）。変更時は Healthchecks の Period/Grace も合わせる
 - `concurrency: group: check-outage` で重複起動を直列化（state.json の push 衝突防止）
 - Actionsタブから手動実行可能
