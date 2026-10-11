@@ -7,7 +7,7 @@ from dataclasses import replace
 import pytest
 
 from src.archiver import WaybackArchiver
-from src.config import MONTHLY_TWEET_LIMIT
+from src.config import MONTHLY_TWEET_LIMIT, WAYBACK_RUN_BUDGET
 from src.main import EXIT_UPSTREAM_UNAVAILABLE, main
 from src.scraper import UpstreamRejectedError, UpstreamUnavailableError
 from src.state_manager import ChangeResult, StateManager
@@ -36,15 +36,15 @@ def allow_sending(mocker):
 def archiver_class(mocker):
     """main() が生成する WaybackArchiver をクラスごとモックに差し替える
 
-    既定では有効（enabled=True）だが archive() は None（失敗）を返す。これにより
-    認証情報なしの警告が他のテストの WARNING 件数に混ざらず、魚拓の成否を試したい
-    テストは archive.return_value / side_effect を上書きするだけでよい。
+    既定では有効（enabled=True）で archive() は成功（公開 URL を返す）。これにより
+    認証情報なしの警告や魚拓失敗のサマリが他のテストの WARNING 件数に混ざらず、
+    魚拓の失敗を試したいテストは side_effect を None にして return_value を上書きする。
     本物の archiver を使うテストは、このフィクスチャより後に patch し直す。
     """
     cls = mocker.patch("src.main.WaybackArchiver")
     instance = cls.return_value
     instance.enabled = True
-    instance.archive.return_value = None
+    instance.archive.side_effect = _archived
     instance.__enter__.return_value = instance
     return cls
 
@@ -295,12 +295,8 @@ class TestMainFunction:
             assert main() == 0
 
         notify.assert_not_called()
-        # スキップ件は魚拓の対象になり、モック archiver は失敗するので魚拓のサマリ
-        # WARNING も出る。ここで数えるのは投稿制限の警告だけ
         warnings = [
-            r.getMessage()
-            for r in caplog.records
-            if r.levelno == logging.WARNING and "投稿制限" in r.getMessage()
+            r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
         ]
         assert warnings == [
             "3 件の通知を投稿制限のためスキップしました（今月 0 件送信済み）"
@@ -454,6 +450,7 @@ class TestArchiveIntegration:
         """魚拓が None（失敗）でも記録が増えず終了コード 0 で、サマリが WARNING に出ること"""
         mocker.patch("src.notifier.DRY_RUN", True)
         fetch.return_value = [sample_outage]
+        archiver.archive.side_effect = None
         archiver.archive.return_value = None
 
         with caplog.at_level(logging.INFO):
@@ -572,6 +569,33 @@ class TestArchiveIntegration:
         assert seen["state"]["stats"]["total_notifications_this_month"] == 1
         stored_after = _read_state(state_file)["outages"][sample_outage.id]
         assert stored_after["archives"][0]["url"] == _archived(sample_outage.url)
+
+    def test_run_budget_stops_remaining_targets(
+        self, mocker, state_file, fetch, allow_sending, archiver, make_outage, caplog
+    ):
+        """魚拓の時間予算を超えたら残りの件を諦め、失敗として数えること"""
+        mocker.patch("src.notifier.DRY_RUN", True)
+        first, second = make_outage("1"), make_outage("2")
+        fetch.return_value = [first, second]
+        # 予算の起点 → 1 件目の前（予算内） → 2 件目の前（予算超過）
+        mocker.patch(
+            "src.main.time.monotonic",
+            side_effect=[0.0, 1.0, WAYBACK_RUN_BUDGET + 1.0],
+        )
+
+        with caplog.at_level(logging.INFO):
+            assert main() == 0
+
+        archiver.archive.assert_called_once_with(first.url)
+        warnings = [
+            r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
+        ]
+        assert any("時間予算" in w and "残り 1 件" in w for w in warnings)
+        assert "魚拓を 1 件取得、1 件失敗" in warnings
+        state = _read_state(state_file)
+        assert state["outages"]["1"]["archives"][0]["url"] == _archived(first.url)
+        assert state["outages"]["2"]["archives"] == []
+        assert state["outages"]["2"]["notified_statuses"] == [""]
 
     def test_tweet_text_never_contains_archive_url(
         self, mocker, state_file, fetch, allow_sending, archiver, sample_outage

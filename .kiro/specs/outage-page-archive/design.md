@@ -174,8 +174,10 @@ sequenceDiagram
 ```
 
 - **順序の決定**: 魚拓は全通知の後。ツイートを魚拓の待ち時間（最大 120 秒/件）で遅らせない。巻き戻しの直後に一度 `save_state()` してから魚拓に入り、魚拓中にプロセスが落ちても投稿済みのマークとカウンタを失わないようにする。魚拓の後の `save_state()` は記録が無ければ dirty でないので書き込まない。`"failed"` の件は魚拓の対象に含めないので、記録が巻き戻しで消えることはない
-- **ゲーティング**: `main` は対象が 0 件なら archiver を生成せず、DRY RUN なら archiver を生成せずに対象 URL をログに出して終える（認証情報の有無より先に判定する）。`archive()` 自身も先頭で「無効（認証情報なし）」「DRY RUN」を判定して None を返す（保険）。無効時の警告は archiver 生成時に 1 回だけ出す
-- **時間上限**: 保存要求の送信から `WAYBACK_TIMEOUT` 秒を deadline とし、`WAYBACK_POLL_INTERVAL` 秒ごとにステータスを問い合わせる。問い合わせ自体の通信エラー・5xx・非 JSON は一時的な失敗として deadline まで問い合わせを続ける（ジョブは Wayback 側で動き続けているため）。deadline 超過は失敗（None）。各 HTTP 要求には `REQUEST_TIMEOUT` を付ける
+- **ゲーティング**: `main` は対象が 0 件なら archiver を生成せず、DRY RUN なら archiver を生成せずに対象 URL をログに出して終える（認証情報の有無より先に判定する）。`archive()` 自身は先頭で「無効（認証情報なし）」だけを判定して None を返し、DRY RUN は知らない（判定を main に集約する）。無効時の警告は archiver 生成時に 1 回だけ出す
+- **時間上限**: 保存要求の送信から `WAYBACK_TIMEOUT` 秒を deadline とし、`WAYBACK_POLL_INTERVAL` 秒ごとにステータスを問い合わせる。問い合わせ自体の通信エラー・5xx・408/429・非 JSON は一時的な失敗として deadline まで問い合わせを続ける（ジョブは Wayback 側で動き続けているため）。それ以外の 4xx（401/403/404）は再試行しても変わらないので即座に失敗にし、HTTP ステータスを警告に出す。deadline 超過は失敗（None）。各 HTTP 要求には `REQUEST_TIMEOUT` を付ける
+- **保存要求の再試行**: POST の 5xx・408/429・通信エラー・非 JSON は `WAYBACK_SUBMIT_RETRY_WAIT` 秒後に 1 回だけ再試行する（SPN2 は過負荷時に 503 や HTML を返す）。それ以外の 4xx と `job_id` なしの応答は再試行しない
+- **実行全体の時間予算**: `main` は魚拓フェーズの開始から `WAYBACK_RUN_BUDGET` 秒を超えたら残りの件を失敗として数えて諦める。対象が多い実行（状態ファイルの作り直し直後など）で実行時間が数十分に延び、Healthchecks の猶予を超えて誤報になるのを防ぐ。通知済みの状態は魚拓の前に保存済みなので通知には影響しない
 
 ## Requirements Traceability
 
@@ -262,7 +264,7 @@ class WaybackArchiver:
     def __exit__(self, *exc_info: object) -> None: ...
 
     def _submit(self, url: str) -> str | None:
-        """保存要求を送り job_id を返す。応答に job_id が無ければ message を WARNING に出して None"""
+        """保存要求を送り job_id を返す。一時的な失敗は 1 回だけ再試行し、失敗なら WARNING を出して None"""
 
     def _wait_for_capture(self, job_id: str) -> str | None:
         """status が success になるまで WAYBACK_POLL_INTERVAL 秒ごとに問い合わせ、timestamp を返す。
@@ -270,7 +272,7 @@ class WaybackArchiver:
 ```
 - Preconditions: `url` は絶対 URL（`OutageInfo.url` は `urljoin` 済み）
 - Postconditions: 戻り値が str のとき、その URL は Wayback 上で解決できる。None のとき WARNING（無効時は生成時の 1 回のみ、DRY RUN は INFO）が出ている
-- Invariants: 1 回の `archive()` の所要時間は `REQUEST_TIMEOUT + WAYBACK_TIMEOUT + REQUEST_TIMEOUT` 秒を超えない。例外を送出しない
+- Invariants: 1 回の `archive()` の所要時間は `REQUEST_TIMEOUT × 2 + WAYBACK_SUBMIT_RETRY_WAIT + WAYBACK_TIMEOUT + REQUEST_TIMEOUT` 秒を超えない。例外を送出しない
 
 ##### API Contract（Wayback SPN2、外部）
 | Method | Endpoint | Request | Response | Errors |
@@ -367,6 +369,8 @@ WAYBACK_SAVE_URL = "https://web.archive.org/save"
 WAYBACK_POLL_INTERVAL = 5  # ステータス問い合わせの間隔（秒）
 WAYBACK_TIMEOUT = 120  # 保存要求から完了までの上限（秒）。SPN2 側の最大所要時間に合わせる
 WAYBACK_IF_NOT_ARCHIVED_WITHIN = 60  # この秒数内の既存キャプチャは流用せず新規に取る（実行間隔 10 分より短く）
+WAYBACK_RUN_BUDGET = 300  # 1 回の実行で魚拓に費やす時間の上限（秒）。超えたら残りを諦める
+WAYBACK_SUBMIT_RETRY_WAIT = 5  # 保存要求の一時的な失敗を 1 回再試行するまでの待機（秒）
 
 def get_wayback_credentials() -> tuple[str, str]:
     """(WAYBACK_ACCESS_KEY, WAYBACK_SECRET_KEY) を環境変数から返す（未設定は空文字）"""
@@ -421,11 +425,14 @@ def get_wayback_credentials() -> tuple[str, str]:
 |------|----------|------|
 | 認証情報が未設定 | `WaybackArchiver.__init__` | 無効化。WARNING「魚拓の認証情報が未設定のため取得をスキップします」を生成時に 1 回。`archive()` は None |
 | DRY RUN | `archive()` 先頭 | INFO「[DRY RUN] 魚拓の取得をスキップ: <url>」。None。要求は送らない |
-| 保存要求の通信エラー・非 2xx | `_submit` | WARNING（HTTP ステータスと `message` があればそれ）。None |
+| 保存要求の通信エラー・5xx・408/429・非 JSON | `_submit` / `_post_save` | 一時的な失敗として INFO に出し、`WAYBACK_SUBMIT_RETRY_WAIT` 秒後に 1 回だけ再試行。続けば WARNING（HTTP ステータスと `message`）。None |
+| 保存要求のそれ以外の 4xx（401/403 など） | `_post_save` | 再試行せず WARNING（HTTP ステータスと `message`）。None |
 | 応答に `job_id` が無い（レート制限・セッション上限） | `_submit` | WARNING に `message` を含める。None |
 | ステータスが `error` | `_wait_for_capture` | WARNING に `status_ext` と `message`。None。404 は `error:not-found` |
 | `pending` のまま `WAYBACK_TIMEOUT` 超過 | `_wait_for_capture` | WARNING「時間切れ」。None。Wayback 側で後から完了しても記録しない |
-| ステータス問い合わせの通信エラー・5xx・非 JSON | `_fetch_status` / `_wait_for_capture` | 一時的な失敗として INFO に出し、`WAYBACK_TIMEOUT` まで再問い合わせ。続けば時間切れの WARNING で None |
+| ステータス問い合わせの通信エラー・5xx・408/429・非 JSON | `_fetch_status` / `_wait_for_capture` | 一時的な失敗として INFO に出し、`WAYBACK_TIMEOUT` まで再問い合わせ。続けば時間切れの WARNING で None |
+| ステータス問い合わせのそれ以外の 4xx（401/403/404） | `_fetch_status` | 再試行せず WARNING（HTTP ステータスと `message`）。None |
+| 魚拓フェーズが `WAYBACK_RUN_BUDGET` 秒を超えた | `main._archive_outages` | WARNING「時間予算を超えたため、残り n 件の取得を諦めます」。残りを失敗として数える |
 | archiver 内の想定外の例外 | `main._archive_outages` | `logger.exception`。その件は失敗として数え、次の件へ |
 
 ### Monitoring
@@ -467,6 +474,7 @@ def get_wayback_credentials() -> tuple[str, str]:
 
 ## Performance & Scalability
 - 1 件の魚拓で実行時間が 5〜60 秒（最大約 3 分）延びる。通常の変更は 1 実行あたり 1〜2 件
+- 魚拓フェーズ全体は `WAYBACK_RUN_BUDGET`（300 秒）で打ち切る。対象が十数件になる実行（状態ファイルの作り直し直後など）でも Healthchecks の猶予（30 分）を超えない
 - 魚拓は全通知の後なので、ツイートの速報性は変わらない
 - 実行が 10 分を超えた場合も `concurrency` により後続ランは待機し、重複実行にはならない
 - SPN2 の制限（7 件/分、同一 URL 10 件/日）は、順次処理と 1 障害あたり数件という実績から超えない

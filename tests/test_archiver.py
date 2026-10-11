@@ -12,7 +12,12 @@ import requests
 import responses as responses_lib
 
 from src.archiver import WaybackArchiver
-from src.config import WAYBACK_IF_NOT_ARCHIVED_WITHIN, WAYBACK_SAVE_URL, WAYBACK_TIMEOUT
+from src.config import (
+    WAYBACK_IF_NOT_ARCHIVED_WITHIN,
+    WAYBACK_SAVE_URL,
+    WAYBACK_SUBMIT_RETRY_WAIT,
+    WAYBACK_TIMEOUT,
+)
 
 ACCESS_KEY = "test-access-key"
 SECRET_KEY = "s3cr3t-wayback-key"
@@ -126,18 +131,6 @@ class TestWaybackArchiver:
         # 無効時はセッションに認証ヘッダを持たない
         assert "Authorization" not in archiver.session.headers
 
-    @responses_lib.activate
-    def test_dry_run_skips_request(self, archiver, mocker, caplog):
-        """DRY RUN では要求を送らず、対象 URL を INFO に出して None を返すこと"""
-        mocker.patch("src.archiver.DRY_RUN", True)
-        with caplog.at_level(logging.INFO):
-            assert archiver.archive(TARGET_URL) is None
-        infos = [r for r in caplog.records if r.levelno == logging.INFO]
-        assert len(infos) == 1
-        assert "[DRY RUN]" in infos[0].getMessage()
-        assert TARGET_URL in infos[0].getMessage()
-        assert len(responses_lib.calls) == 0
-
     def test_context_manager_closes_session(self, wayback_credentials, mocker):
         """with ブロックを抜けるとセッションが閉じられること"""
         with WaybackArchiver() as archiver:
@@ -205,11 +198,32 @@ class TestArchive:
 
 
 class TestSubmitFailures:
-    """保存要求（POST）が失敗したときのテスト。いずれも None を返し例外を外に出さない"""
+    """保存要求（POST）が失敗したときのテスト。いずれも None を返し例外を外に出さない
+
+    一時的な失敗（5xx・408/429・通信エラー・非 JSON）は 1 回だけ再試行し、
+    それ以外の 4xx と job_id なしの応答は再試行しない。
+    """
 
     @responses_lib.activate
-    def test_http_429_returns_none(self, archiver, caplog):
-        """429 応答では None を返し、HTTP ステータスを警告に含めること"""
+    def test_transient_error_is_retried_once_then_succeeds(
+        self, archiver, no_sleep, caplog
+    ):
+        """503 の後に成功すれば公開 URL を返し、警告は出さないこと"""
+        _add_submit({"message": "overloaded"}, status=503)
+        _add_submit({"url": TARGET_URL, "job_id": JOB_ID})
+        _add_status({"status": "success", "timestamp": TIMESTAMP})
+        with caplog.at_level(logging.INFO):
+            assert archiver.archive(TARGET_URL) == ARCHIVED_URL
+        assert _warnings(caplog) == []
+        assert any("再試行" in r.getMessage() for r in caplog.records)
+        no_sleep.assert_called_once_with(WAYBACK_SUBMIT_RETRY_WAIT)
+        assert len(responses_lib.calls) == 3
+
+    @responses_lib.activate
+    def test_http_429_is_retried_once_then_returns_none(
+        self, archiver, no_sleep, caplog
+    ):
+        """429 が続けば 1 回再試行した後に None を返し、HTTP ステータスを警告に含めること"""
         _add_submit({"message": "Too many requests"}, status=429)
         with caplog.at_level(logging.WARNING):
             assert archiver.archive(TARGET_URL) is None
@@ -217,6 +231,20 @@ class TestSubmitFailures:
         assert len(warnings) == 1
         assert "429" in warnings[0].getMessage()
         assert "Too many requests" in warnings[0].getMessage()
+        no_sleep.assert_called_once()
+        assert len(responses_lib.calls) == 2
+        assert SECRET_KEY not in caplog.text
+
+    @responses_lib.activate
+    def test_http_401_is_not_retried(self, archiver, no_sleep, caplog):
+        """401（認証エラー）は再試行せず None を返し、HTTP ステータスを警告に含めること"""
+        _add_submit({"message": "You need to be logged in"}, status=401)
+        with caplog.at_level(logging.WARNING):
+            assert archiver.archive(TARGET_URL) is None
+        warnings = _warnings(caplog)
+        assert len(warnings) == 1
+        assert "401" in warnings[0].getMessage()
+        no_sleep.assert_not_called()
         assert len(responses_lib.calls) == 1
         assert SECRET_KEY not in caplog.text
 
@@ -235,8 +263,8 @@ class TestSubmitFailures:
         assert SECRET_KEY not in caplog.text
 
     @responses_lib.activate
-    def test_connection_error_returns_none(self, archiver, caplog):
-        """接続エラーでは None を返し、例外を外に出さないこと"""
+    def test_connection_error_returns_none(self, archiver, no_sleep, caplog):
+        """接続エラーが続けば 1 回再試行した後に None を返し、例外を外に出さないこと"""
         responses_lib.add(
             responses_lib.POST,
             WAYBACK_SAVE_URL,
@@ -245,16 +273,19 @@ class TestSubmitFailures:
         with caplog.at_level(logging.WARNING):
             assert archiver.archive(TARGET_URL) is None
         assert len(_warnings(caplog)) == 1
+        no_sleep.assert_called_once()
+        assert len(responses_lib.calls) == 2
         assert SECRET_KEY not in caplog.text
 
     @responses_lib.activate
-    def test_non_json_response_returns_none(self, archiver, caplog):
-        """JSON でない応答では None を返すこと"""
+    def test_non_json_response_returns_none(self, archiver, no_sleep, caplog):
+        """JSON でない応答が続けば 1 回再試行した後に None を返すこと"""
         _add_submit("<html>maintenance</html>")
         with caplog.at_level(logging.WARNING):
             assert archiver.archive(TARGET_URL) is None
         assert len(_warnings(caplog)) == 1
-        assert len(responses_lib.calls) == 1
+        no_sleep.assert_called_once()
+        assert len(responses_lib.calls) == 2
 
 
 class TestWaitForCaptureFailures:
@@ -358,6 +389,19 @@ class TestWaitForCaptureFailures:
         assert "時間切れ" in warnings[0].getMessage()
         no_sleep.assert_not_called()
         assert len(responses_lib.calls) == 2
+
+    @responses_lib.activate
+    def test_status_client_error_is_not_retried(self, archiver, no_sleep, caplog):
+        """ステータス問い合わせの 404 などは再試行せず None を返し、HTTP ステータスを警告に含めること"""
+        _add_submit({"url": TARGET_URL, "job_id": JOB_ID})
+        _add_status({"message": "job not found"}, status=404)
+        with caplog.at_level(logging.WARNING):
+            assert archiver.archive(TARGET_URL) is None
+        warnings = _warnings(caplog)
+        assert len(warnings) == 1
+        assert "404" in warnings[0].getMessage()
+        assert "job not found" in warnings[0].getMessage()
+        no_sleep.assert_not_called()
         assert len(responses_lib.calls) == 2
 
     @responses_lib.activate

@@ -47,6 +47,14 @@ WAYBACK_TIMEOUT = 120
 # 検出時の古いキャプチャが返り、復旧後の内容が残らない。実行間隔（10 分）より
 # 短くして、変更を検出するたびに新しいキャプチャを作る。
 WAYBACK_IF_NOT_ARCHIVED_WITHIN = 60
+# 1 回の実行で魚拓に費やす時間の上限（秒）。超えたら残りの件は諦める。
+# 1 件あたり最大 REQUEST_TIMEOUT × 2 + WAYBACK_TIMEOUT ≒ 3 分かかりうるため、対象が
+# 多い実行（状態ファイルの作り直し直後など）で実行時間が数十分に延び、Healthchecks の
+# 猶予（30 分）を超えて誤報になるのを防ぐ。通常の実行（1〜2 件）には影響しない。
+WAYBACK_RUN_BUDGET = 300
+# 保存要求が一時的なエラー（5xx・408/429・通信エラー・非 JSON）になったとき、
+# 1 回だけ再試行するまでの待機秒数。SPN2 は過負荷時に 503 や HTML を返すことがある。
+WAYBACK_SUBMIT_RETRY_WAIT = 5
 
 # DRY RUNモード（True の場合、X への投稿をスキップ）
 DRY_RUN = os.environ.get("DRY_RUN", "false").lower() == "true"

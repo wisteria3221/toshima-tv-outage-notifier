@@ -2,13 +2,14 @@
 
 import logging
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
 from typing import Literal
 
 from .archiver import WaybackArchiver
-from .config import DRY_RUN, LOG_LEVEL, STATE_FILE_PATH
+from .config import DRY_RUN, LOG_LEVEL, STATE_FILE_PATH, WAYBACK_RUN_BUDGET
 from .notifier import XNotifier, can_send_notification, should_notify_change
 from .scraper import (
     ToshimaScraper,
@@ -136,6 +137,8 @@ def _archive_outages(
     魚拓はベストエフォート。archiver の生成から各件の取得までを例外捕捉で包み、
     予期しない例外もログに残して次の件へ進む（通知の成否・終了コード・状態保存に
     影響させない）。失敗した件は記録せず、以降の実行でも再試行しない。
+    1 回の実行で費やす時間は WAYBACK_RUN_BUDGET 秒までとし、超えたら残りの件は
+    失敗として数えて諦める（対象が多い実行で Healthchecks の猶予を超えないため）。
 
     Args:
         state_manager: 状態マネージャ（成功した件の記録先）
@@ -164,7 +167,16 @@ def _archive_outages(
                 # 認証情報なしの警告は生成時に 1 回出ている。試行 0 件として扱い、
                 # 件数サマリは出さない
                 return 0, 0
-            for item in targets:
+            deadline = time.monotonic() + WAYBACK_RUN_BUDGET
+            for index, item in enumerate(targets):
+                if time.monotonic() >= deadline:
+                    remaining = len(targets) - index
+                    logger.warning(
+                        f"魚拓の時間予算（{WAYBACK_RUN_BUDGET} 秒）を超えたため、"
+                        f"残り {remaining} 件の取得を諦めます"
+                    )
+                    failure_count += remaining
+                    break
                 try:
                     archived_url = archiver.archive(item.url)
                 except Exception:
