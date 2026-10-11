@@ -325,7 +325,7 @@ class TestMainFunction:
 ARCHIVED_URL = "https://web.archive.org/web/20261002051318/{url}"
 
 
-def _archived(url: str) -> str:
+def _archived(url: str, deadline: float | None = None) -> str:
     """詳細 URL に対応する魚拓の公開 URL（モック archiver の戻り値用）"""
     return ARCHIVED_URL.format(url=url)
 
@@ -366,8 +366,8 @@ class TestArchiveIntegration:
             "archive",
         ]
         assert manager.archive.call_args_list == [
-            mocker.call(new.url),
-            mocker.call(known.url),
+            mocker.call(new.url, deadline=mocker.ANY),
+            mocker.call(known.url, deadline=mocker.ANY),
         ]
 
         state = _read_state(state_file)
@@ -397,7 +397,7 @@ class TestArchiveIntegration:
         assert main() == 0
 
         notify.assert_not_called()
-        archiver.archive.assert_called_once_with(sample_outage.url)
+        archiver.archive.assert_called_once_with(sample_outage.url, deadline=mocker.ANY)
         stored = _read_state(state_file)["outages"][sample_outage.id]
         assert stored["notified_statuses"] == []
         assert [a["url"] for a in stored["archives"]] == [_archived(sample_outage.url)]
@@ -417,7 +417,7 @@ class TestArchiveIntegration:
 
         assert main() == 1
 
-        archiver.archive.assert_called_once_with(ok.url)
+        archiver.archive.assert_called_once_with(ok.url, deadline=mocker.ANY)
         state = _read_state(state_file)
         assert [a["url"] for a in state["outages"][ok.id]["archives"]] == [
             _archived(ok.url)
@@ -555,7 +555,7 @@ class TestArchiveIntegration:
         mocker.patch("src.main.XNotifier._post_tweet", return_value=True)
         seen: dict[str, dict] = {}
 
-        def _archive_and_peek(url: str) -> str:
+        def _archive_and_peek(url: str, deadline: float | None = None) -> str:
             seen["state"] = _read_state(state_file)
             return _archived(url)
 
@@ -571,22 +571,38 @@ class TestArchiveIntegration:
         assert stored_after["archives"][0]["url"] == _archived(sample_outage.url)
 
     def test_run_budget_stops_remaining_targets(
-        self, mocker, state_file, fetch, allow_sending, archiver, make_outage, caplog
+        self,
+        mocker,
+        state_file,
+        fetch,
+        allow_sending,
+        archiver,
+        make_outage,
+        fake_clock,
+        caplog,
     ):
-        """魚拓の時間予算を超えたら残りの件を諦め、失敗として数えること"""
+        """魚拓の時間予算を超えたら残りの件を諦め、失敗として数えること
+
+        期限は archiver にも渡す（処理中の件が予算を超えて待たないようにするため）。
+        """
         mocker.patch("src.notifier.DRY_RUN", True)
         first, second = make_outage("1"), make_outage("2")
         fetch.return_value = [first, second]
-        # 予算の起点 → 1 件目の前（予算内） → 2 件目の前（予算超過）
-        mocker.patch(
-            "src.main.time.monotonic",
-            side_effect=[0.0, 1.0, WAYBACK_RUN_BUDGET + 1.0],
-        )
+        started_at = fake_clock.now
+
+        def _slow_archive(url: str, deadline: float | None = None) -> str:
+            # 1 件目が予算いっぱいまでかかった
+            fake_clock.advance(WAYBACK_RUN_BUDGET + 1)
+            return _archived(url)
+
+        archiver.archive.side_effect = _slow_archive
 
         with caplog.at_level(logging.INFO):
             assert main() == 0
 
-        archiver.archive.assert_called_once_with(first.url)
+        archiver.archive.assert_called_once_with(
+            first.url, deadline=started_at + WAYBACK_RUN_BUDGET
+        )
         warnings = [
             r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
         ]

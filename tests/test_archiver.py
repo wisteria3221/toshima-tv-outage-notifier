@@ -13,7 +13,9 @@ import responses as responses_lib
 
 from src.archiver import WaybackArchiver
 from src.config import (
+    REQUEST_TIMEOUT,
     WAYBACK_IF_NOT_ARCHIVED_WITHIN,
+    WAYBACK_POLL_INTERVAL,
     WAYBACK_SAVE_URL,
     WAYBACK_SUBMIT_RETRY_WAIT,
     WAYBACK_TIMEOUT,
@@ -33,21 +35,23 @@ _MAX_SLEEP_CALLS = 100
 
 
 @pytest.fixture(autouse=True)
-def no_sleep(mocker):
-    """ポーリング間隔の待機をテストでは省略する
+def no_sleep(mocker, fake_clock):
+    """待機を省き、その秒数だけ偽の時計を進める
 
+    期限の判定は偽の時計で行われるので、待機した分だけ時刻が進めば本物と同じ経路を通る。
     上限判定が壊れてポーリングが止まらなくなった場合、responses は同じ pending 応答を
     無限に返すため、ハングではなく明示的に失敗させる。
     """
     calls = 0
 
-    def _guard(_seconds: float) -> None:
+    def _sleep(seconds: float) -> None:
         nonlocal calls
         calls += 1
         if calls > _MAX_SLEEP_CALLS:
             raise AssertionError("ポーリングが上限回数を超えて続いています")
+        fake_clock.sleep(seconds)
 
-    return mocker.patch("src.archiver.time.sleep", side_effect=_guard)
+    return mocker.patch("time.sleep", side_effect=_sleep)
 
 
 @pytest.fixture
@@ -278,12 +282,32 @@ class TestSubmitFailures:
         assert SECRET_KEY not in caplog.text
 
     @responses_lib.activate
+    def test_retry_is_skipped_when_wait_would_pass_deadline(
+        self, archiver, no_sleep, fake_clock, caplog
+    ):
+        """再試行の待機が期限に収まらなければ待たずに諦め、時間切れを警告すること"""
+        _add_submit({"message": "overloaded"}, status=503)
+        deadline = fake_clock.now + WAYBACK_SUBMIT_RETRY_WAIT - 1
+        with caplog.at_level(logging.WARNING):
+            assert archiver.archive(TARGET_URL, deadline=deadline) is None
+        warnings = _warnings(caplog)
+        assert len(warnings) == 1
+        assert "時間切れ" in warnings[0].getMessage()
+        assert "503" in warnings[0].getMessage()
+        no_sleep.assert_not_called()
+        assert len(responses_lib.calls) == 1
+
+    @responses_lib.activate
     def test_non_json_response_returns_none(self, archiver, no_sleep, caplog):
         """JSON でない応答が続けば 1 回再試行した後に None を返すこと"""
         _add_submit("<html>maintenance</html>")
         with caplog.at_level(logging.WARNING):
             assert archiver.archive(TARGET_URL) is None
-        assert len(_warnings(caplog)) == 1
+        warnings = _warnings(caplog)
+        assert len(warnings) == 1
+        # 原因の切り分け用に本文の先頭を載せる
+        assert "JSON ではありません" in warnings[0].getMessage()
+        assert "<html>maintenance" in warnings[0].getMessage()
         no_sleep.assert_called_once()
         assert len(responses_lib.calls) == 2
 
@@ -311,26 +335,74 @@ class TestWaitForCaptureFailures:
         assert SECRET_KEY not in caplog.text
 
     @responses_lib.activate
-    def test_pending_past_deadline_returns_none(
-        self, archiver, mocker, no_sleep, caplog
-    ):
+    def test_pending_past_deadline_returns_none(self, archiver, no_sleep, caplog):
         """pending のまま上限時間を超えたら None を返し、時間切れを警告すること"""
         _add_submit({"url": TARGET_URL, "job_id": JOB_ID})
         _add_status({"status": "pending"})
-        # 開始 0 秒 → 1 回目の pending 後 10 秒（次の待機後も上限内）
-        # → 2 回目の pending 後に上限超過
-        mocker.patch(
-            "src.archiver.time.monotonic",
-            side_effect=[0.0, 10.0, WAYBACK_TIMEOUT + 1.0],
-        )
         with caplog.at_level(logging.WARNING):
             assert archiver.archive(TARGET_URL) is None
         warnings = _warnings(caplog)
         assert len(warnings) == 1
         assert "時間切れ" in warnings[0].getMessage()
-        no_sleep.assert_called_once()
-        # POST 1 回 + GET 2 回。上限超過後は問い合わせない
-        assert len(responses_lib.calls) == 3
+        assert TARGET_URL in warnings[0].getMessage()
+        # 待機の合計が上限を超える手前で諦める（待ってから判定すると間隔ぶん超過する）
+        polls = WAYBACK_TIMEOUT // WAYBACK_POLL_INTERVAL
+        assert no_sleep.call_count == polls - 1
+        assert len(responses_lib.calls) == 1 + polls
+
+    @responses_lib.activate
+    def test_run_deadline_caps_item_deadline(
+        self, archiver, no_sleep, fake_clock, caplog
+    ):
+        """呼び出し側の期限が 1 件の上限より早ければ、そちらで打ち切ること"""
+        _add_submit({"url": TARGET_URL, "job_id": JOB_ID})
+        _add_status({"status": "pending"})
+        deadline = fake_clock.now + WAYBACK_POLL_INTERVAL * 2 + 1
+        with caplog.at_level(logging.WARNING):
+            assert archiver.archive(TARGET_URL, deadline=deadline) is None
+        assert "時間切れ" in _warnings(caplog)[0].getMessage()
+        # 0 秒・5 秒で問い合わせ、10 秒の問い合わせの後は期限に収まらないので待たない
+        assert no_sleep.call_count == 2
+        assert len(responses_lib.calls) == 1 + 3
+        assert fake_clock.now < deadline
+
+    @responses_lib.activate
+    def test_request_timeout_is_clamped_to_remaining_time(
+        self, archiver, mocker, fake_clock
+    ):
+        """個々の HTTP 要求のタイムアウトを期限までの残り時間に切り詰めること"""
+        _add_submit({"url": TARGET_URL, "job_id": JOB_ID})
+        _add_status({"status": "success", "timestamp": TIMESTAMP})
+        post = mocker.spy(archiver.session, "post")
+        get = mocker.spy(archiver.session, "get")
+        remaining = REQUEST_TIMEOUT / 2
+
+        assert archiver.archive(TARGET_URL, deadline=fake_clock.now + remaining)
+
+        assert post.call_args.kwargs["timeout"] == remaining
+        assert get.call_args.kwargs["timeout"] == remaining
+
+    @responses_lib.activate
+    def test_request_timeout_defaults_to_request_timeout(self, archiver, mocker):
+        """残り時間に余裕があれば通常の REQUEST_TIMEOUT を使うこと"""
+        _add_submit({"url": TARGET_URL, "job_id": JOB_ID})
+        _add_status({"status": "success", "timestamp": TIMESTAMP})
+        post = mocker.spy(archiver.session, "post")
+
+        assert archiver.archive(TARGET_URL) == ARCHIVED_URL
+
+        assert post.call_args.kwargs["timeout"] == REQUEST_TIMEOUT
+
+    @responses_lib.activate
+    def test_deadline_already_passed_sends_nothing(
+        self, archiver, no_sleep, fake_clock, caplog
+    ):
+        """期限を過ぎてから呼ばれたら要求を送らずに None を返し、時間切れを警告すること"""
+        with caplog.at_level(logging.WARNING):
+            assert archiver.archive(TARGET_URL, deadline=fake_clock.now - 1) is None
+        assert "時間切れ" in _warnings(caplog)[0].getMessage()
+        assert len(responses_lib.calls) == 0
+        no_sleep.assert_not_called()
 
     @responses_lib.activate
     def test_status_http_error_is_retried_until_success(
@@ -373,15 +445,17 @@ class TestWaitForCaptureFailures:
 
     @responses_lib.activate
     def test_persistent_status_error_returns_none_at_deadline(
-        self, archiver, mocker, no_sleep, caplog
+        self, archiver, no_sleep, fake_clock, caplog
     ):
         """問い合わせの失敗が上限時間まで続けば None を返し、時間切れを警告すること"""
         _add_submit({"url": TARGET_URL, "job_id": JOB_ID})
-        _add_status({"message": "upstream error"}, status=502)
-        mocker.patch(
-            "src.archiver.time.monotonic",
-            side_effect=[0.0, WAYBACK_TIMEOUT + 1.0],
-        )
+
+        def _slow_502(_request):
+            # 1 回目の問い合わせが上限直前までかかった
+            fake_clock.advance(WAYBACK_TIMEOUT - 1)
+            return 502, {}, '{"message": "upstream error"}'
+
+        responses_lib.add_callback(responses_lib.GET, STATUS_URL, callback=_slow_502)
         with caplog.at_level(logging.WARNING):
             assert archiver.archive(TARGET_URL) is None
         warnings = _warnings(caplog)
@@ -389,6 +463,19 @@ class TestWaitForCaptureFailures:
         assert "時間切れ" in warnings[0].getMessage()
         no_sleep.assert_not_called()
         assert len(responses_lib.calls) == 2
+
+    @responses_lib.activate
+    def test_non_object_json_is_distinguished_from_non_json(self, archiver, caplog):
+        """JSON だがオブジェクトでない応答は「JSON ではない」とは別の説明で再試行すること"""
+        _add_submit({"url": TARGET_URL, "job_id": JOB_ID})
+        _add_status([])
+        _add_status({"status": "success", "timestamp": TIMESTAMP})
+        with caplog.at_level(logging.INFO):
+            assert archiver.archive(TARGET_URL) == ARCHIVED_URL
+        retry = [r.getMessage() for r in caplog.records if "再試行" in r.getMessage()]
+        assert len(retry) == 1
+        assert "JSON オブジェクトではありません" in retry[0]
+        assert "list" in retry[0]
 
     @responses_lib.activate
     def test_status_client_error_is_not_retried(self, archiver, no_sleep, caplog):

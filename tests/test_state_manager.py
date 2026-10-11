@@ -494,6 +494,44 @@ class TestRecordArchive:
         manager2.record_archive("100", "復旧", self.ARCHIVE_URL)
         assert manager2.is_dirty()
 
+    def test_newer_schema_version_is_kept(self, temp_state_file):
+        """現行より新しい schema_version は旧い版数で付け替えないこと
+
+        新しい版のコードが書いたファイルを旧いコードで動かしたとき、版数だけ
+        旧くすると内容（新しい版のフィールド）と食い違う。
+        """
+        temp_state_file.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.3",
+                    "outages": {},
+                    "stats": {"total_notifications_this_month": 0, "month": "2025-12"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        manager = StateManager(temp_state_file)
+        assert manager.state["schema_version"] == "1.3"
+        assert not manager.is_dirty()
+
+    @pytest.mark.parametrize(
+        "version", ["1.1", None, "old"], ids=["older", "missing", "invalid"]
+    )
+    def test_older_or_invalid_schema_version_is_replaced(
+        self, temp_state_file, version
+    ):
+        """現行より旧い・欠落・不正な schema_version はメモリ上で現行に置き換えること"""
+        state = {
+            "outages": {},
+            "stats": {"total_notifications_this_month": 0, "month": "2025-12"},
+        }
+        if version is not None:
+            state["schema_version"] = version
+        temp_state_file.write_text(json.dumps(state), encoding="utf-8")
+        manager = StateManager(temp_state_file)
+        assert manager.state["schema_version"] == StateManager.SCHEMA_VERSION
+        assert not manager.is_dirty()
+
     def test_old_schema_without_archives_is_loaded_as_is(
         self, temp_state_file, sample_outage, make_outage
     ):

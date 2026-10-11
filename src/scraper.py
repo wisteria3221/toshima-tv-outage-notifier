@@ -15,6 +15,7 @@ from .config import (
     MAX_RETRIES,
     REQUEST_TIMEOUT,
     TOSHIMA_TROUBLE_URL,
+    TRANSIENT_CLIENT_ERRORS,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,11 +54,6 @@ _RE_AREA_KEYWORD = re.compile(_AREA_KEYWORDS)
 _RE_AREA_IN_BRACKETS = re.compile(
     rf"{_OPEN_BRACKET}([^）)]*(?:{_AREA_KEYWORDS})[^）)]*){_CLOSE_BRACKET}"
 )
-
-# 4xx のうち一時的な要因とみなしてリトライする応答コード。
-# 408 Request Timeout / 429 Too Many Requests はリトライで解消しうるため、
-# 404 や 403 のような恒久的な拒否（UpstreamRejectedError）とは区別する。
-_TRANSIENT_CLIENT_ERRORS = frozenset({408, 429})
 
 
 class UpstreamUnavailableError(Exception):
@@ -188,7 +184,7 @@ class ToshimaScraper:
                 response = self.session.get(url, timeout=REQUEST_TIMEOUT)
                 if (
                     400 <= response.status_code < 500
-                    and response.status_code not in _TRANSIENT_CLIENT_ERRORS
+                    and response.status_code not in TRANSIENT_CLIENT_ERRORS
                 ):
                     raise UpstreamRejectedError(
                         f"障害情報ページが拒否されました: {url} - "

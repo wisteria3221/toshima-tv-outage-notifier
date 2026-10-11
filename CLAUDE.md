@@ -110,7 +110,7 @@ npx cc-sdd@latest --claude-skills --lang ja
 **状態ファイルフォーマット** ([data/state.json](data/state.json))
 - 既知の全障害を通知履歴とともに追跡
 - 各障害には `notified_statuses` 配列があり、重複通知を防ぐ
-- 各障害には `archives` 配列があり、魚拓の記録（`status` / `archived_at` / `url`）を追記する（スキーマ 1.2。`archives` を持たない旧形式のファイルも変換せずそのまま読む）
+- 各障害には `archives` 配列があり、魚拓の記録（`status` / `archived_at` / `url`）を追記する（スキーマ 1.2。`archives` を持たない旧形式のファイルも変換せずそのまま読む。読み込んだ `schema_version` は現行より旧いときだけメモリ上で現行にし、新しい版数はそのまま残す。dirty にはしない）
 - 月間通知カウンターを含み、レート制限に使用
 - 月が変わると自動的にカウンターをリセット（月判定は UTC。ワークフローの `TZ=Asia/Tokyo` は影響しない）
 
@@ -187,7 +187,7 @@ GitHub Actions のみ（シークレット）:
 - 日本語テキストから日付、ステータス、タイトル、地域を抽出するために正規表現を使用
 - ステータス抽出: テキスト先頭（日付直後）の括弧内テキストのみ（`_RE_STATUS` は `match` で先頭固定）。地理的用語は除外し、タイトル途中の括弧（例「（STB）」）はステータスにしない
 - 地域抽出: 括弧内の地理的用語（丁目、付近、地区、区、全域、駅など。`_AREA_KEYWORDS`）を識別。キーワードはステータスの否定判定と共有しているので、追加するときは実在のステータス（復旧、仮復旧、調査中、予定日など）に含まれない語に限る
-- リトライロジック: 接続エラー・タイムアウト・5xx・408/429（`_TRANSIENT_CLIENT_ERRORS`）は 5回まで指数バックオフ（1/3/9/27 秒）で再試行。1ページ目を取得できなければ `UpstreamUnavailableError`
+- リトライロジック: 接続エラー・タイムアウト・5xx・408/429（`TRANSIENT_CLIENT_ERRORS`。[src/config.py](src/config.py) に置き、archiver と区分を共有する）は 5回まで指数バックオフ（1/3/9/27 秒）で再試行。1ページ目を取得できなければ `UpstreamUnavailableError`
 - 上記以外の 4xx（404 の URL 変更、403 の UA ブロックなど）はリトライしても変わらないので即座に `UpstreamRejectedError`。`main()` は 1 を返す（2 にすると恒久的な破損が警告止まりで埋もれる）。ただし 2 ページ目以降の 4xx は「最終ページの次が無い」正常系なので、`fetch_outage_list()` が警告のみで打ち切り、取得済みの結果を返す
 - 同じ障害 ID へのリンクが 1 ページに複数あっても `_parse_list_page()` が最初の 1 件に重複排除する（サムネイル画像リンクや「詳しくはこちら」が追加されると同じ障害が 2 件になり二重投稿するため）
 - `ToshimaScraper` はコンテキストマネージャで、`main()` は `with` で使ってセッションを閉じる
@@ -227,13 +227,13 @@ GitHub Actions のみ（シークレット）:
 
 **魚拓取得（Wayback Machine）** ([src/archiver.py](src/archiver.py))
 - 契機と対象: 新規検出・ステータス変更のうち通知結果が `"sent"` または `"skipped"` だった件の詳細 URL（`OutageInfo.url`）のみ。`"failed"` の件は対象外（巻き戻しで state から外れ、次回再検出時に取る）。一覧ページは取らない
-- 順序は「通知ループ → 巻き戻し → 保存 → 魚拓 → 保存」（`main()` の手順 7〜9、`_archive_outages()`）。通知の後に回すのは速報性のため（1 件あたり最大 `WAYBACK_TIMEOUT`=120 秒かかり、通知の前や合間に挟むとツイートがその分遅れる）。魚拓の**前**に一度保存するのは、魚拓中にランナーが落ちても投稿済みのマークとカウンタを失わないため（失うと次回二重投稿になる）。魚拓の後の保存は記録が無ければ dirty でないのでスキップされる
-- ベストエフォート: `WaybackArchiver.archive()` は例外を送出せず、失敗はすべて WARNING + `None` に正規化する。`main` 側もさらに `try/except Exception` で隔離し、終了コード・通知済みマーク・月間カウンタ・`failed_outage_ids` には反映しない。失敗した件は記録せず、以降の実行でも再試行しない（意図した仕様。レビューで「取りこぼし」として指摘しないこと）。ただし 1 件の処理の中では一時的な失敗を再試行する: 保存要求（POST）の 5xx・408/429・通信エラー・非 JSON は `WAYBACK_SUBMIT_RETRY_WAIT` 秒後に 1 回だけ再試行し、完了確認（ステータス問い合わせ）の同種の失敗は上限時間まで問い合わせを続ける（SPN2 のジョブ自体は動き続けて完了するため、1 回の失敗で諦めると実在する魚拓を捨てることになる）。401/403/404 などそれ以外の 4xx はキーの失効や無効な job_id なので再試行せず、HTTP ステータスを警告に出す（scraper と同じ区分）。1 回の実行で魚拓に費やす時間は `WAYBACK_RUN_BUDGET`（300 秒）までで、超えたら残りの件を失敗として数えて諦める（対象が多い実行で Healthchecks の猶予 30 分を超えないため。状態は魚拓の前に保存済みなので通知には影響しない）。末尾に「魚拓を n 件取得、m 件失敗」を出す（m > 0 なら WARNING。対象なし・認証情報なし・DRY RUN で試行 0 件のときは出さない）
+- 順序は「通知ループ → 巻き戻し → 保存 → 魚拓 → 保存」（`main()` の手順 7〜9、`_archive_outages()`）。通知の後に回すのは速報性のため（1 件あたり最大 `WAYBACK_TIMEOUT`=120 秒かかり、通知の前や合間に挟むとツイートがその分遅れる。この上限は保存要求の再試行から完了確認までを通した `archive()` 全体の期限で、各 HTTP 要求のタイムアウトも残り時間に切り詰めるので超えない）。魚拓の**前**に一度保存するのは、魚拓中にランナーが落ちても投稿済みのマークとカウンタを失わないため（失うと次回二重投稿になる）。魚拓の後の保存は記録が無ければ dirty でないのでスキップされる
+- ベストエフォート: `WaybackArchiver.archive()` は例外を送出せず、失敗はすべて WARNING + `None` に正規化する。`main` 側もさらに `try/except Exception` で隔離し、終了コード・通知済みマーク・月間カウンタ・`failed_outage_ids` には反映しない。失敗した件は記録せず、以降の実行でも再試行しない（意図した仕様。レビューで「取りこぼし」として指摘しないこと）。ただし 1 件の処理の中では一時的な失敗を再試行する: 保存要求（POST）の 5xx・408/429・通信エラー・非 JSON は `WAYBACK_SUBMIT_RETRY_WAIT` 秒後に 1 回だけ再試行し、完了確認（ステータス問い合わせ）の同種の失敗は期限まで問い合わせを続ける（SPN2 のジョブ自体は動き続けて完了するため、1 回の失敗で諦めると実在する魚拓を捨てることになる）。401/403/404 などそれ以外の 4xx はキーの失効や無効な job_id なので再試行せず、HTTP ステータスを警告に出す（scraper と同じ区分）。1 回の実行で魚拓に費やす時間は `WAYBACK_RUN_BUDGET`（300 秒）までで、`main` はこの期限を `archive(url, deadline=...)` にも渡して処理中の件をその時点で打ち切り、残りの件は失敗として数えて諦める（対象が多い実行で Healthchecks の猶予 30 分を超えないため。状態は魚拓の前に保存済みなので通知には影響しない）。末尾に「魚拓を n 件取得、m 件失敗」を出す（m > 0 なら WARNING。対象なし・認証情報なし・DRY RUN で試行 0 件のときは出さない）
 - 認証情報（`WAYBACK_ACCESS_KEY` / `WAYBACK_SECRET_KEY`）が揃っていなければ生成時に WARNING を 1 回出して無効化し、`archive()` は何も送らず `None`。対象が 0 件の実行では archiver を生成しない（毎回警告を出さないため）。値はログ・例外メッセージ・状態ファイルに出さない（`Authorization: LOW key:secret` ヘッダはセッションにだけ設定）
 - DRY RUN では `main` が archiver を生成せず（要求を送らず）、対象 URL を INFO に出して「[DRY RUN] 魚拓の取得を n 件スキップしました」で締める。認証情報の有無より先に判定するので、キーを持たないローカル環境でも同じログになる。archiver 側は DRY RUN を知らない（判定は main に集約し、二重に持たない）
 - 記録は `StateManager.record_archive()` で障害エントリの `archives` 配列に追記する（`{"status", "archived_at", "url"}`、`archived_at` は UTC ISO 8601）。同じステータスの記録が既にあっても追記する。旧形式のエントリには初回追記時に配列を作る
 - SPN2 の `if_not_archived_within` は `WAYBACK_IF_NOT_ARCHIVED_WITHIN`=60 秒。既定の 1 時間のままだと新規検出から 1 時間以内の復旧で検出時の古いキャプチャが返るため、実行間隔（10 分）より短くして変更のたびに新しいキャプチャを作る。`capture_all` は付けず、404 の詳細ページ（`error:not-found`）は記録しない
-- テスト: [tests/conftest.py](tests/conftest.py) の autouse フィクスチャ `no_wayback_credentials` が両方の環境変数を削除し、ローカルの `.env` に本物のキーがあっても保存要求が出ないようにする（`never_post_for_real` と同じ目的）。[tests/test_main.py](tests/test_main.py) は autouse で `src.main.WaybackArchiver` をモックしているので、本物の archiver を使うテストは個別に patch し直す
+- テスト: [tests/conftest.py](tests/conftest.py) の autouse フィクスチャ `no_wayback_credentials` が両方の環境変数を削除し、ローカルの `.env` に本物のキーがあっても保存要求が出ないようにする（`never_post_for_real` と同じ目的）。[tests/test_main.py](tests/test_main.py) は autouse で `src.main.WaybackArchiver` をモックしているので、本物の archiver を使うテストは個別に patch し直す。期限の判定は conftest の `fake_clock`（`time.monotonic` の偽の時計。test_archiver の `no_sleep` は待機した秒数だけこれを進める）で試す。`time.monotonic` を固定の並びで返すモックにしない（計測箇所が増えると StopIteration で壊れる）
 
 **メッセージフォーマット** ([src/notifier.py](src/notifier.py) の `_format_new_outage_message()` / `_format_status_change_message()`)
 - ヘッダーとタイトル行の決定は `_header_and_title_format()` に共通化。復旧/終了/完了（`_RESOLUTION_STATUSES`）なら "【としまテレビ {status}情報】" + "{title} が{status}しました"、それ以外のステータスがあれば既定ヘッダー + "{title}（{status}）"、ステータスなしなら既定ヘッダー + "{title}"

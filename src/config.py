@@ -33,23 +33,30 @@ BACKOFF_FACTOR = 3  # 指数バックオフの係数（待機秒数 = BACKOFF_FA
 # タイムアウト設定（秒）
 REQUEST_TIMEOUT = 30
 
+# 4xx のうち一時的な要因とみなしてリトライする応答コード。
+# 408 Request Timeout / 429 Too Many Requests はリトライで解消しうるため、
+# 404 や 403 のような恒久的な拒否とは区別する。scraper と archiver で同じ区分を使う。
+TRANSIENT_CLIENT_ERRORS = frozenset({408, 429})
+
 # Wayback Machine（Save Page Now 2）設定
 # 障害詳細ページの魚拓を取る保存要求の送り先。ステータス問い合わせも同じ URL 配下。
 WAYBACK_SAVE_URL = "https://web.archive.org/save"
 # ステータス問い合わせの間隔（秒）。保存は通常 5〜60 秒で終わるので、
 # これより短くしても早く終わらず SPN2 側への問い合わせ回数だけ増える。
 WAYBACK_POLL_INTERVAL = 5
-# 保存要求から完了までの上限（秒）。SPN2 の 1 件あたりの最大所要時間（約 2 分）に
-# 合わせる。超えたら諦めて None（魚拓なし）とし、通知処理を止めない。
+# 1 件の魚拓に費やす時間の上限（秒）。保存要求（再試行を含む）から完了確認までを
+# 通して数え、個々の HTTP タイムアウトも残り時間に切り詰めるので、この値を超えない。
+# SPN2 の 1 件あたりの最大所要時間（約 2 分）に合わせる。超えたら諦めて None
+# （魚拓なし）とし、通知処理を止めない。
 WAYBACK_TIMEOUT = 120
 # この秒数内に取られた既存キャプチャは流用せず新規に取る（秒）。
 # SPN2 の既定（1 時間）のままだと、新規検出から 1 時間以内に復旧した場合に
 # 検出時の古いキャプチャが返り、復旧後の内容が残らない。実行間隔（10 分）より
 # 短くして、変更を検出するたびに新しいキャプチャを作る。
 WAYBACK_IF_NOT_ARCHIVED_WITHIN = 60
-# 1 回の実行で魚拓に費やす時間の上限（秒）。超えたら残りの件は諦める。
-# 1 件あたり最大 REQUEST_TIMEOUT × 2 + WAYBACK_TIMEOUT ≒ 3 分かかりうるため、対象が
-# 多い実行（状態ファイルの作り直し直後など）で実行時間が数十分に延び、Healthchecks の
+# 1 回の実行で魚拓に費やす時間の上限（秒）。処理中の件もこの期限で打ち切り、
+# 残りの件は諦める。1 件あたり最大 WAYBACK_TIMEOUT かかりうるため、対象が多い実行
+# （状態ファイルの作り直し直後など）で実行時間が数十分に延び、Healthchecks の
 # 猶予（30 分）を超えて誤報になるのを防ぐ。通常の実行（1〜2 件）には影響しない。
 WAYBACK_RUN_BUDGET = 300
 # 保存要求が一時的なエラー（5xx・408/429・通信エラー・非 JSON）になったとき、
@@ -74,6 +81,11 @@ def get_x_credentials() -> dict[str, str]:
         "access_token": os.environ.get("X_ACCESS_TOKEN", ""),
         "access_token_secret": os.environ.get("X_ACCESS_TOKEN_SECRET", ""),
     }
+
+
+def is_transient_status(status_code: int) -> bool:
+    """応答コードが一時的な要因（5xx・408/429）で、リトライしてよいかどうか"""
+    return status_code >= 500 or status_code in TRANSIENT_CLIENT_ERRORS
 
 
 def get_wayback_credentials() -> tuple[str, str]:

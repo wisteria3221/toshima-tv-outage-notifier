@@ -39,6 +39,39 @@ def no_wayback_credentials(monkeypatch):
     monkeypatch.delenv("WAYBACK_SECRET_KEY", raising=False)
 
 
+class FakeClock:
+    """time.monotonic / time.sleep の代役
+
+    sleep は実際には待たず、その秒数だけ時計を進める。advance() で任意に進められる。
+    値を固定の並びで返すモックと違い、呼び出し回数に依存しないので、計測箇所が
+    増えても StopIteration で壊れない。
+    """
+
+    def __init__(self, start: float = 1_000.0) -> None:
+        self.now = start
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def fake_clock(mocker):
+    """time.monotonic を偽の時計に差し替える（time.sleep は差し替えない）
+
+    期限の判定を試すテストで使う。待機も省きたいテストは time.sleep を clock.sleep に
+    別途差し替える（test_archiver の no_sleep を参照）。
+    """
+    clock = FakeClock()
+    mocker.patch("time.monotonic", clock.monotonic)
+    return clock
+
+
 @pytest.fixture
 def temp_state_file(tmp_path):
     """一時的な状態ファイル"""

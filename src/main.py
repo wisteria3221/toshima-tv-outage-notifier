@@ -137,8 +137,9 @@ def _archive_outages(
     魚拓はベストエフォート。archiver の生成から各件の取得までを例外捕捉で包み、
     予期しない例外もログに残して次の件へ進む（通知の成否・終了コード・状態保存に
     影響させない）。失敗した件は記録せず、以降の実行でも再試行しない。
-    1 回の実行で費やす時間は WAYBACK_RUN_BUDGET 秒までとし、超えたら残りの件は
-    失敗として数えて諦める（対象が多い実行で Healthchecks の猶予を超えないため）。
+    1 回の実行で費やす時間は WAYBACK_RUN_BUDGET 秒までとし、期限は archiver にも渡して
+    処理中の件もその時点で打ち切る。期限を過ぎたら残りの件は失敗として数えて諦める
+    （対象が多い実行で Healthchecks の猶予を超えないため）。
 
     Args:
         state_manager: 状態マネージャ（成功した件の記録先）
@@ -178,7 +179,8 @@ def _archive_outages(
                     failure_count += remaining
                     break
                 try:
-                    archived_url = archiver.archive(item.url)
+                    # 実行全体の期限も渡し、処理中の件がこの期限を超えて待たないようにする
+                    archived_url = archiver.archive(item.url, deadline=deadline)
                 except Exception:
                     # archive() は例外を出さない契約だが、万一抜けてきても
                     # この件だけ失敗にして次の件へ進む

@@ -23,6 +23,16 @@ def _current_month() -> str:
     return datetime.now(UTC).strftime("%Y-%m")
 
 
+def _schema_key(version: object) -> tuple[int, ...]:
+    """schema_version（"1.2" 形式）を比較用のタプルにする。欠落・不正なら最古扱い"""
+    if not isinstance(version, str):
+        return (0,)
+    try:
+        return tuple(int(part) for part in version.split("."))
+    except ValueError:
+        return (0,)
+
+
 def display_status(status: str) -> str:
     """ステータスの表示名を返す（空文字 = 括弧なし = 「進行中」）"""
     return status or "進行中"
@@ -87,8 +97,11 @@ class StateManager:
 
         旧形式（schema_version 1.0/1.1、障害エントリに archives が無い）も変換せずに
         そのまま読み、魚拓の記録なしとして扱う。schema_version の値では分岐しない。
-        読み込んだ schema_version はメモリ上で現行の値に置き換える（dirty にはしない。
-        変更のない実行で毎回コミットが発生しないよう、次に本当に保存するときだけ反映する）。
+        読み込んだ schema_version が現行より旧ければメモリ上で現行の値に置き換える
+        （dirty にはしない。変更のない実行で毎回コミットが発生しないよう、次に本当に
+        保存するときだけ反映する）。現行より新しい値はそのまま残す（新しい版のコードが
+        書いたファイルを旧いコードで巻き戻し運用したときに、版数だけ旧く付け替えて
+        内容と食い違わせないため）。
 
         Returns:
             状態辞書
@@ -118,7 +131,8 @@ class StateManager:
         logger.info(
             f"状態ファイルを読み込みました: {len(state['outages'])} 件の障害情報"
         )
-        state["schema_version"] = self.SCHEMA_VERSION
+        if _schema_key(state.get("schema_version")) < _schema_key(self.SCHEMA_VERSION):
+            state["schema_version"] = self.SCHEMA_VERSION
         return state
 
     def _create_initial_state(self) -> dict:
