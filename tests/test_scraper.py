@@ -181,6 +181,20 @@ class TestExtractStatus:
         text = "2025.12.01（池袋1丁目付近）障害発生"
         assert scraper._extract_status(text) == ""
 
+    @pytest.mark.parametrize(
+        "area",
+        ["豊島区全域", "池袋駅周辺", "豊島区", "西東京市"],
+    )
+    def test_extract_status_ignores_area_without_chome(self, scraper, area):
+        """丁目・付近を含まない地域（区・市・全域・駅）もステータスとして誤認しない"""
+        text = f"2025.12.09（{area}）インターネットサービス障害について"
+        status = scraper._extract_status(text)
+        title, extracted = scraper._extract_title_and_area(text, "2025.12.09", status)
+
+        assert status == ""
+        assert extracted == area
+        assert title == "インターネットサービス障害について"
+
     def test_extract_status_ignores_bracket_inside_title(self, scraper):
         """タイトル途中の括弧（例: STB）をステータスとして誤認しない"""
         text = "2025.12.09 サービス停波（STB）について"
