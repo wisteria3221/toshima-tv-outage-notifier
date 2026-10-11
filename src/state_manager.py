@@ -70,7 +70,7 @@ class StateManager:
     新規障害やステータス変更を検出する
     """
 
-    SCHEMA_VERSION = "1.1"
+    SCHEMA_VERSION = "1.2"
 
     def __init__(self, state_file: Path | None = None):
         """初期化
@@ -84,6 +84,9 @@ class StateManager:
 
     def _load_state(self) -> dict:
         """状態ファイルを読み込む
+
+        旧形式（schema_version 1.0/1.1、障害エントリに archives が無い）も変換せずに
+        そのまま読み、魚拓の記録なしとして扱う。schema_version の値では分岐しない。
 
         Returns:
             状態辞書
@@ -199,7 +202,10 @@ class StateManager:
         return ChangeResult(new_outages=new_outages, status_changes=status_changes)
 
     def update_outages(self, outages: list[OutageInfo]) -> None:
-        """障害情報を更新（通知状態は保持）
+        """障害情報を更新（通知状態と魚拓記録は保持）
+
+        既存エントリは追跡フィールド（_TRACKED_FIELDS）だけを上書きするので、
+        notified_statuses と archives はそのまま残る。
 
         Args:
             outages: 最新の障害情報リスト
@@ -223,9 +229,11 @@ class StateManager:
                     "first_seen": now,
                     "last_updated": now,
                     "notified_statuses": [],
+                    "archives": [],
                 }
             elif any(existing.get(k) != v for k, v in fields.items()):
                 # 既存エントリー: いずれかのフィールドが変わっていれば更新
+                # （追跡フィールドのみ。notified_statuses と archives は保持する）
                 self._mark_dirty()
                 existing.update(fields, last_updated=now)
 
@@ -274,6 +282,37 @@ class StateManager:
             notified.append(status)
             self._mark_dirty()
             logger.debug(f"通知済みマーク: ID={outage_id}, ステータス={status}")
+
+    def record_archive(self, outage_id: str, status: str, archived_url: str) -> None:
+        """魚拓の記録を障害エントリの archives に追記する
+
+        記録は {"status", "archived_at", "url"} の 3 キーで、archived_at は呼び出し
+        時刻（UTC、ISO 8601。first_seen と同形式）。既存の記録は保持して末尾に追記し、
+        同じステータスの記録が既にあっても追記する（巻き戻し後の再検出や push 失敗後の
+        再実行で同じステータスを再取得した記録も残すため）。
+        archives を持たない旧形式のエントリには初回追記時に配列を作る。
+        mark_notified() と同じく、state に存在しない障害 ID は無視する。
+
+        Args:
+            outage_id: 障害ID
+            status: 魚拓を取った時点の対象ステータス（空文字 = 進行中）
+            archived_url: 魚拓の公開 URL
+        """
+        entry = self.state["outages"].get(outage_id)
+        if entry is None:
+            return
+        entry.setdefault("archives", []).append(
+            {
+                "status": status,
+                "archived_at": datetime.now(UTC).isoformat(),
+                "url": archived_url,
+            }
+        )
+        self._mark_dirty()
+        logger.debug(
+            f"魚拓を記録: ID={outage_id}, ステータス={display_status(status)}, "
+            f"URL={archived_url}"
+        )
 
     def increment_notification_count(self) -> None:
         """月間通知カウントをインクリメント"""

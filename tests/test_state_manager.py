@@ -1,5 +1,6 @@
 """状態管理のテスト"""
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -26,7 +27,7 @@ class TestStateManager:
         """初期状態が正しく作成されること"""
         manager = StateManager(temp_state_file)
 
-        assert manager.state["schema_version"] == "1.1"
+        assert manager.state["schema_version"] == "1.2"
         assert manager.state["outages"] == {}
         assert "stats" in manager.state
         assert "last_check" not in manager.state  # last_checkは削除済み
@@ -410,6 +411,179 @@ class TestRollbackOutages:
         manager.mark_notified(sample_outage.id, "")
 
         assert snapshot[sample_outage.id]["notified_statuses"] == []
+
+
+class TestRecordArchive:
+    """魚拓記録（record_archive）のテスト"""
+
+    ARCHIVE_URL = "https://web.archive.org/web/20261002051318/https://www.toshima.co.jp/trouble/detail/100"
+
+    def test_new_outage_has_empty_archives(self, temp_state_file, sample_outage):
+        """新規障害エントリは空の archives 配列を持つこと"""
+        manager = StateManager(temp_state_file)
+        manager.update_outages([sample_outage])
+
+        assert manager.state["outages"]["100"]["archives"] == []
+
+    def test_record_has_status_archived_at_and_url(
+        self, temp_state_file, sample_outage
+    ):
+        """記録が status / archived_at / url だけを持ち、取得日時が UTC であること"""
+        manager = StateManager(temp_state_file)
+        manager.update_outages([sample_outage])
+        before = datetime.now(UTC)
+
+        manager.record_archive("100", "復旧", self.ARCHIVE_URL)
+
+        archives = manager.state["outages"]["100"]["archives"]
+        assert len(archives) == 1
+        record = archives[0]
+        assert set(record) == {"status", "archived_at", "url"}
+        assert record["status"] == "復旧"
+        assert record["url"] == self.ARCHIVE_URL
+        archived_at = datetime.fromisoformat(record["archived_at"])
+        assert archived_at.tzinfo is not None
+        assert archived_at.utcoffset().total_seconds() == 0
+        assert before <= archived_at <= datetime.now(UTC)
+
+    def test_second_record_keeps_first(self, temp_state_file, sample_outage):
+        """別ステータスを追記しても 1 件目の記録が残ること"""
+        manager = StateManager(temp_state_file)
+        manager.update_outages([sample_outage])
+        manager.record_archive("100", "", self.ARCHIVE_URL)
+
+        manager.record_archive("100", "復旧", self.ARCHIVE_URL + "?v=2")
+
+        archives = manager.state["outages"]["100"]["archives"]
+        assert [a["status"] for a in archives] == ["", "復旧"]
+        assert archives[0]["url"] == self.ARCHIVE_URL
+        assert archives[1]["url"] == self.ARCHIVE_URL + "?v=2"
+
+    def test_same_status_is_appended_again(self, temp_state_file, sample_outage):
+        """同じステータスでも追記されること（再検出時の再取得も記録に残す）"""
+        manager = StateManager(temp_state_file)
+        manager.update_outages([sample_outage])
+
+        manager.record_archive("100", "復旧", self.ARCHIVE_URL)
+        manager.record_archive("100", "復旧", self.ARCHIVE_URL)
+
+        assert len(manager.state["outages"]["100"]["archives"]) == 2
+
+    def test_unknown_outage_is_ignored(self, temp_state_file, sample_outage):
+        """state に存在しない障害 ID は無視され、例外も変更も起きないこと"""
+        manager = StateManager(temp_state_file)
+        manager.update_outages([sample_outage])
+        manager.save_state()
+        assert not manager.is_dirty()
+
+        manager.record_archive("999", "復旧", self.ARCHIVE_URL)
+
+        assert "999" not in manager.state["outages"]
+        assert manager.state["outages"]["100"]["archives"] == []
+        assert not manager.is_dirty()
+
+    def test_record_archive_marks_dirty(self, temp_state_file, sample_outage):
+        """追記すると保存が必要な状態（dirty）になること"""
+        manager = StateManager(temp_state_file)
+        manager.update_outages([sample_outage])
+        manager.save_state()
+
+        manager2 = StateManager(temp_state_file)
+        assert not manager2.is_dirty()
+
+        manager2.record_archive("100", "復旧", self.ARCHIVE_URL)
+        assert manager2.is_dirty()
+
+    def test_old_schema_without_archives_is_loaded_as_is(
+        self, temp_state_file, sample_outage, make_outage
+    ):
+        """archives を持たない旧形式のファイルをそのまま読み、追記できること"""
+        old_state = {
+            "schema_version": "1.1",
+            "outages": {
+                "100": {
+                    "id": "100",
+                    "date": "2025.12.20",
+                    "status": "",
+                    "title": "テスト障害",
+                    "area": "池袋",
+                    "url": "https://www.toshima.co.jp/trouble/detail/100",
+                    "first_seen": "2025-12-20T00:00:00+00:00",
+                    "last_updated": "2025-12-20T00:00:00+00:00",
+                    "notified_statuses": [""],
+                }
+            },
+            "stats": {"total_notifications_this_month": 0, "month": "2025-12"},
+        }
+        temp_state_file.write_text(
+            json.dumps(old_state, ensure_ascii=False), encoding="utf-8"
+        )
+
+        manager = StateManager(temp_state_file)
+        assert "archives" not in manager.state["outages"]["100"]
+
+        # 旧形式のエントリにも追記できる（初回追記時に配列を作る）
+        manager.record_archive("100", "復旧", self.ARCHIVE_URL)
+        archives = manager.state["outages"]["100"]["archives"]
+        assert len(archives) == 1
+        assert archives[0]["status"] == "復旧"
+
+        # 既存障害の更新でも記録と通知履歴が残る
+        manager.update_outages([replace(sample_outage, status="復旧")])
+        stored = manager.state["outages"]["100"]
+        assert stored["status"] == "復旧"
+        assert stored["archives"] == archives
+        assert stored["notified_statuses"] == [""]
+
+        # 新規障害には空の archives が作られる
+        other = make_outage("200", date="2025.12.21", title="別の障害", area="")
+        manager.update_outages([sample_outage, other])
+        assert manager.state["outages"]["200"]["archives"] == []
+
+    def test_update_outages_keeps_archives(self, temp_state_file, sample_outage):
+        """既存障害の情報更新後も魚拓記録が残ること"""
+        manager = StateManager(temp_state_file)
+        manager.update_outages([sample_outage])
+        manager.record_archive("100", "", self.ARCHIVE_URL)
+
+        manager.update_outages([replace(sample_outage, status="復旧")])
+
+        stored = manager.state["outages"]["100"]
+        assert stored["status"] == "復旧"
+        assert len(stored["archives"]) == 1
+        assert stored["archives"][0]["url"] == self.ARCHIVE_URL
+
+    def test_rollback_of_other_outage_keeps_archives(
+        self, temp_state_file, sample_outage, make_outage
+    ):
+        """対象外の障害を巻き戻しても、別の障害の魚拓記録が消えないこと"""
+        manager = StateManager(temp_state_file)
+        other = make_outage("200", date="2025.12.21", title="別の障害", area="")
+        snapshot = manager.snapshot_outages()
+        manager.update_outages([sample_outage, other])
+        manager.record_archive("100", "", self.ARCHIVE_URL)
+
+        manager.rollback_outages(["200"], snapshot)
+
+        assert "200" not in manager.state["outages"]
+        archives = manager.state["outages"]["100"]["archives"]
+        assert len(archives) == 1
+        assert archives[0]["url"] == self.ARCHIVE_URL
+
+    def test_archives_survive_save_and_load(self, temp_state_file, sample_outage):
+        """保存して読み直しても魚拓記録が残ること"""
+        manager = StateManager(temp_state_file)
+        manager.update_outages([sample_outage])
+        manager.record_archive("100", "", self.ARCHIVE_URL)
+        manager.record_archive("100", "復旧", self.ARCHIVE_URL + "?v=2")
+        manager.save_state()
+
+        manager2 = StateManager(temp_state_file)
+
+        archives = manager2.state["outages"]["100"]["archives"]
+        assert [a["status"] for a in archives] == ["", "復旧"]
+        assert archives[1]["url"] == self.ARCHIVE_URL + "?v=2"
+        assert set(archives[0]) == {"status", "archived_at", "url"}
 
 
 class TestChangeResult:
