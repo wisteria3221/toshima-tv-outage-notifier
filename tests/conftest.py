@@ -25,6 +25,20 @@ def never_post_for_real(mocker):
     )
 
 
+@pytest.fixture(autouse=True)
+def no_wayback_credentials(monkeypatch):
+    """テストから Wayback Machine への本物の保存要求が出ないことを保証するガード
+
+    魚拓取得は環境変数 WAYBACK_ACCESS_KEY / WAYBACK_SECRET_KEY が揃っているときだけ
+    有効になる。ローカルに本物のキーを持つ .env があると、モックを忘れたテストから
+    保存要求が走るため、既定で両方を削除しておく（never_post_for_real と同じ目的）。
+    認証情報を必要とするテストは、このフィクスチャより後に monkeypatch.setenv で
+    自分で設定する。
+    """
+    monkeypatch.delenv("WAYBACK_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("WAYBACK_SECRET_KEY", raising=False)
+
+
 @pytest.fixture
 def temp_state_file(tmp_path):
     """一時的な状態ファイル"""

@@ -1,7 +1,11 @@
 """テスト共通ガードのテスト"""
 
+import os
+
 import pytest
 import tweepy
+
+from src.config import get_wayback_credentials
 
 
 class TestNeverPostForReal:
@@ -22,3 +26,18 @@ class TestNeverPostForReal:
         )
         with pytest.raises(AssertionError, match="実投稿"):
             notifier._post_tweet("hello")
+
+
+class TestNoWaybackCredentials:
+    """魚拓要求ガード（conftest.no_wayback_credentials）のテスト"""
+
+    def test_wayback_credentials_are_empty_in_tests(self):
+        """プロセスの環境変数に Wayback のキーがあってもテスト内では空文字になること
+
+        ローカルの .env に本物のキーがあっても、モックを忘れたテストから
+        Wayback Machine への保存要求が出ないことを保証する。
+        例: `WAYBACK_ACCESS_KEY=x WAYBACK_SECRET_KEY=y uv run pytest` でも通る。
+        """
+        assert "WAYBACK_ACCESS_KEY" not in os.environ
+        assert "WAYBACK_SECRET_KEY" not in os.environ
+        assert get_wayback_credentials() == ("", "")
