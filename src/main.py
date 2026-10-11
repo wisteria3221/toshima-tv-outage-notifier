@@ -142,10 +142,18 @@ def _archive_outages(
         targets: 通知結果が「送信」または「スキップ」だった作業単位
 
     Returns:
-        (成功件数, 失敗件数)。対象が無い・archiver が無効（認証情報なし）・DRY RUN なら (0, 0)
+        (成功件数, 失敗件数)。対象が無い・DRY RUN・archiver が無効（認証情報なし）なら (0, 0)
     """
     if not targets:
         # 対象が無ければ archiver を生成しない（認証情報なしの警告を毎回出さないため）
+        return 0, 0
+    if DRY_RUN:
+        # DRY RUN では archiver を生成せず（要求を送らず）、対象 URL だけログに出す。
+        # 試行 0 件として扱い、WARNING の件数サマリは出さない。認証情報の有無より先に
+        # 判定するので、キーを持たないローカル環境でも DRY RUN のログは同じになる
+        for item in targets:
+            logger.info(f"[DRY RUN] 魚拓の取得をスキップ: {item.url}")
+        logger.info(f"[DRY RUN] 魚拓の取得を {len(targets)} 件スキップしました")
         return 0, 0
 
     success_count = 0
@@ -166,11 +174,6 @@ def _archive_outages(
                         f"魚拓の取得で予期しない例外が発生しました: {item.description}"
                     )
                     archived_url = None
-                if DRY_RUN:
-                    # DRY RUN では archive() が要求を送らず対象 URL を INFO に出して None を
-                    # 返す。失敗時も None なので戻り値では区別できず、ここで DRY RUN を見て
-                    # 記録も計数もしない。各件の archive() は対象 URL のログのために呼ぶ
-                    continue
                 if archived_url is None:
                     # 失敗の理由は archiver 側が WARNING に出している
                     failure_count += 1
@@ -178,10 +181,6 @@ def _archive_outages(
                 state_manager.record_archive(item.outage_id, item.status, archived_url)
                 success_count += 1
                 logger.info(f"魚拓を取得しました: {item.description} -> {archived_url}")
-            if DRY_RUN:
-                # 試行 0 件として扱い、WARNING の件数サマリは出さない
-                logger.info(f"[DRY RUN] 魚拓の取得を {len(targets)} 件スキップしました")
-                return 0, 0
     except Exception:
         # archiver の生成やセッションの後始末で例外が出た場合。まだ成功していない件を
         # すべて失敗として数える
@@ -304,14 +303,18 @@ def main() -> int:
         if failed_outage_ids:
             state_manager.rollback_outages(failed_outage_ids, snapshot)
 
-        # 7. 詳細ページの魚拓を取る
-        # 順序は「通知ループ → 巻き戻し → 魚拓 → 保存」。
+        # 7. 通知済みの状態をここで一度保存する（保存・スキップのログは save_state() 側で出す）
+        # 次の魚拓は 1 件あたり最大数分かかる。保存を魚拓の後だけにすると、その間に
+        # ランナーが落ちたとき投稿済みのマークとカウンタが失われ、次回二重投稿になる。
+        logger.info("状態を保存しています...")
+        state_manager.save_state()
+
+        # 8. 詳細ページの魚拓を取る
+        # 順序は「通知ループ → 巻き戻し → 保存 → 魚拓 → 保存」。
         # - 通知の後に回すのは速報性のため: 魚拓は 1 件あたり最大 WAYBACK_TIMEOUT 秒
         #   かかるので、通知の前や合間に挟むとツイートがその分遅れる
         # - 「失敗」の件を対象にしないのは、巻き戻しで state から外れて次回実行で
-        #   再検出されるため（そのときに取る）。巻き戻しと魚拓の順序を入れ替えても
-        #   記録が巻き戻しで消えることはないが、記録を追記してから保存する流れを
-        #   読みやすくするため巻き戻しの後に置く
+        #   再検出されるため（そのときに取る）
         # - 魚拓の結果は終了コード・通知済みマーク・月間カウンタ・failed_outage_ids に
         #   反映しない（ベストエフォート）
         archived_count, archive_failed_count = _archive_outages(
@@ -326,11 +329,10 @@ def main() -> int:
             else:
                 logger.info(archive_summary)
 
-        # 8. 状態保存（保存・スキップのログは save_state() 側で出す）
-        logger.info("状態を保存しています...")
+        # 9. 魚拓の記録を保存する（記録が無ければ dirty でないので書き込みはスキップされる）
         state_manager.save_state()
 
-        # 9. 通知失敗があればエラー終了する
+        # 10. 通知失敗があればエラー終了する
         # GitHub Actions のジョブが失敗するため、サイレントな取りこぼしを防ぐ。
         # 状態はすでに保存済みで、ワークフローは終了コード 1 でもコミットする。
         if failed_outage_ids:

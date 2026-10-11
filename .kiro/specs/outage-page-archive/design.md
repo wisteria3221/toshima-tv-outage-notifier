@@ -127,7 +127,7 @@ CLAUDE.md                # 魚拓取得の仕様（契機・対象・失敗時�
 
 ### Modified Files
 - `src/config.py` — `WAYBACK_SAVE_URL`、`WAYBACK_POLL_INTERVAL`（5 秒）、`WAYBACK_TIMEOUT`（120 秒）、`WAYBACK_IF_NOT_ARCHIVED_WITHIN`（60 秒）、`get_wayback_credentials()` を追加（4.1）
-- `src/state_manager.py` — `SCHEMA_VERSION = "1.2"`、`update_outages()` の新規エントリに `"archives": []`、`record_archive(outage_id, status, archived_url)` を追加。`_load_state()` は変更しない（旧形式をそのまま読む）（2.1, 2.2, 2.5, 2.6）
+- `src/state_manager.py` — `SCHEMA_VERSION = "1.2"`、`update_outages()` の新規エントリに `"archives": []`、`record_archive(outage_id, status, archived_url)` を追加。`_load_state()` は旧形式をそのまま読み、`schema_version` だけメモリ上で現行値にする（dirty にしない）（2.1, 2.2, 2.5, 2.6）
 - `src/main.py` — `_PendingNotification` に `url` フィールドを追加。通知ループの結果を保持し、ループ後に `_archive_outages()` で `"sent"` / `"skipped"` の件を順に処理する。archiver の生成と呼び出しを `try/except Exception` で包む。件数サマリのログ（1.1–1.5, 3.2, 3.5, 3.6）
 - `tests/test_state_manager.py` — `schema_version == "1.1"` の期待値を `"1.2"` に更新。`TestRecordArchive` と旧スキーマ読み込みのテストを追加
 - `tests/test_main.py` — `src.main.WaybackArchiver` をパッチし、呼び出し順序（全通知の後）、対象（failed を除く）、例外隔離（終了コード不変）、認証情報なし時の警告を検証
@@ -158,13 +158,14 @@ sequenceDiagram
         Main->>State: mark_notified on sent
     end
     Main->>State: rollback_outages for failed
+    Main->>State: save_state
     loop each sent or skipped item
         Main->>Archiver: archive detail url
         Archiver->>SPN2: POST save
         SPN2-->>Archiver: job_id
         loop until success or error or timeout
             Archiver->>SPN2: GET save status job_id
-            SPN2-->>Archiver: pending or success or error
+            SPN2-->>Archiver: pending or success or error or transient failure
         end
         Archiver-->>Main: archived url or None
         Main->>State: record_archive on success
@@ -172,9 +173,9 @@ sequenceDiagram
     Main->>State: save_state
 ```
 
-- **順序の決定**: 魚拓は全通知の後。ツイートを魚拓の待ち時間（最大 120 秒/件）で遅らせない。巻き戻しは魚拓の前に行うが、`"failed"` の件はそもそも魚拓の対象に含めないので、順序を入れ替えても記録が巻き戻しで消えることはない
-- **ゲーティング**: `archive()` は先頭で「無効（認証情報なし）」「DRY RUN」を判定して None を返す。無効時の警告は archiver 生成時に 1 回だけ出す（魚拓の対象がある実行でしか生成しないので毎回は出ない）
-- **時間上限**: 保存要求の送信から `WAYBACK_TIMEOUT` 秒を deadline とし、`WAYBACK_POLL_INTERVAL` 秒ごとにステータスを問い合わせる。deadline 超過は失敗（None）。各 HTTP 要求には `REQUEST_TIMEOUT` を付ける
+- **順序の決定**: 魚拓は全通知の後。ツイートを魚拓の待ち時間（最大 120 秒/件）で遅らせない。巻き戻しの直後に一度 `save_state()` してから魚拓に入り、魚拓中にプロセスが落ちても投稿済みのマークとカウンタを失わないようにする。魚拓の後の `save_state()` は記録が無ければ dirty でないので書き込まない。`"failed"` の件は魚拓の対象に含めないので、記録が巻き戻しで消えることはない
+- **ゲーティング**: `main` は対象が 0 件なら archiver を生成せず、DRY RUN なら archiver を生成せずに対象 URL をログに出して終える（認証情報の有無より先に判定する）。`archive()` 自身も先頭で「無効（認証情報なし）」「DRY RUN」を判定して None を返す（保険）。無効時の警告は archiver 生成時に 1 回だけ出す
+- **時間上限**: 保存要求の送信から `WAYBACK_TIMEOUT` 秒を deadline とし、`WAYBACK_POLL_INTERVAL` 秒ごとにステータスを問い合わせる。問い合わせ自体の通信エラー・5xx・非 JSON は一時的な失敗として deadline まで問い合わせを続ける（ジョブは Wayback 側で動き続けているため）。deadline 超過は失敗（None）。各 HTTP 要求には `REQUEST_TIMEOUT` を付ける
 
 ## Requirements Traceability
 
@@ -319,7 +320,7 @@ class StateManager:
 - Concurrency strategy: 既存どおり（ワークフローの `concurrency` と push 時の `-X theirs`）
 
 **Implementation Notes**
-- Integration: `_load_state()` は変更しない。`archives` キーが無いエントリは「記録なし」。`schema_version` の値で分岐しない（1.1 → 1.2 は追加キーのみ）
+- Integration: `_load_state()` は `archives` キーが無いエントリを「記録なし」として読み、`schema_version` の値で分岐しない（1.1 → 1.2 は追加キーのみ）。読み込んだ `schema_version` はメモリ上で現行の値に置き換えるが dirty にはしない（次に本当に保存するときだけファイルに反映される）
 - Validation: 旧形式（`archives` なし）を読んで `record_archive()` できること、`update_outages()` 後も `archives` が残ること、巻き戻しで記録が消えないことをテストする
 - Risks: 状態ファイルの肥大化は 1 記録 約 150 バイトで無視できる
 
@@ -342,15 +343,15 @@ class StateManager:
 **Contracts**: Service [ ] / API [ ] / Event [ ] / Batch [x] / State [ ]
 
 ##### Batch / Job Contract
-- Trigger: 通知ループと `rollback_outages()` の後、`save_state()` の前
+- Trigger: 通知ループ・`rollback_outages()`・1 回目の `save_state()` の後。終了後にもう一度 `save_state()`
 - Input / validation: `"sent"` / `"skipped"` の `_PendingNotification`（`outage_id`, `status`, `url`）
 - Output / destination: 成功した件は `state_manager.record_archive(outage_id, status, archived_url)`。ログに「魚拓を取得しました: <障害の説明> -> <魚拓 URL>」、失敗は archiver の WARNING、最後に INFO「魚拓 n 件取得、m 件失敗」（m > 0 なら WARNING）
 - Idempotency & recovery: 失敗は記録せず再試行しない。push 失敗後の再実行では通知が 403 duplicate で `"sent"` 扱いになり魚拓も再取得されるが、前回の記録は保存されていないので重複しない
 
 **Implementation Notes**
-- Integration: 順序依存（通知ループ → 巻き戻し → 魚拓 → 保存）は理由をコメントに書く（steering「順序依存はコメントで明示する」）
+- Integration: 順序依存（通知ループ → 巻き戻し → 保存 → 魚拓 → 保存）は理由をコメントに書く（steering「順序依存はコメントで明示する」）
 - Validation: `src.main.WaybackArchiver` をパッチし、`archive` の呼び出し回数と引数、`record_archive` の結果、例外時の終了コードを検証する
-- Risks: 魚拓中のプロセス異常終了で通知済みマークが未保存になる。archiver が例外を出さず、HTTP に必ずタイムアウトを付けることで防ぐ
+- Risks: 魚拓中のプロセス異常終了。通知済みマークは魚拓の前に保存済みなので失われない。archiver が例外を出さず、HTTP に必ずタイムアウトを付けることで実行時間も抑える
 
 ### 設定
 
@@ -424,7 +425,7 @@ def get_wayback_credentials() -> tuple[str, str]:
 | 応答に `job_id` が無い（レート制限・セッション上限） | `_submit` | WARNING に `message` を含める。None |
 | ステータスが `error` | `_wait_for_capture` | WARNING に `status_ext` と `message`。None。404 は `error:not-found` |
 | `pending` のまま `WAYBACK_TIMEOUT` 超過 | `_wait_for_capture` | WARNING「時間切れ」。None。Wayback 側で後から完了しても記録しない |
-| ステータス問い合わせの通信エラー・非 JSON | `_wait_for_capture` | WARNING。None（同一 job の再問い合わせはしない） |
+| ステータス問い合わせの通信エラー・5xx・非 JSON | `_fetch_status` / `_wait_for_capture` | 一時的な失敗として INFO に出し、`WAYBACK_TIMEOUT` まで再問い合わせ。続けば時間切れの WARNING で None |
 | archiver 内の想定外の例外 | `main._archive_outages` | `logger.exception`。その件は失敗として数え、次の件へ |
 
 ### Monitoring

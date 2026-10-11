@@ -514,33 +514,64 @@ class TestArchiveIntegration:
         assert stored["archives"] == []
 
     def test_dry_run_skips_archiving_without_warning(
-        self, mocker, state_file, fetch, allow_sending, archiver, sample_outage, caplog
+        self,
+        mocker,
+        state_file,
+        fetch,
+        allow_sending,
+        archiver_class,
+        sample_outage,
+        caplog,
     ):
-        """DRY RUN では各件の archive() は呼ぶ（対象 URL のログは archiver が出す）が、
-        None を失敗として数えず WARNING のサマリも出さないこと"""
+        """DRY RUN では archiver を生成せず（要求を送らず）、対象 URL を INFO に出し、
+        失敗として数えず WARNING のサマリも出さないこと"""
         mocker.patch("src.notifier.DRY_RUN", True)
         mocker.patch("src.main.DRY_RUN", True)
         fetch.return_value = [sample_outage]
-        archiver.archive.return_value = None
 
         with caplog.at_level(logging.INFO):
             assert main() == 0
 
-        archiver.archive.assert_called_once_with(sample_outage.url)
+        archiver_class.assert_not_called()
         assert [
             r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING
         ] == []
         assert not any(r.getMessage().startswith("魚拓を") for r in caplog.records)
-        assert any(
-            "[DRY RUN]" in r.getMessage() and "魚拓" in r.getMessage()
-            for r in caplog.records
-            if r.name == "src.main"
-        )
+        main_messages = [r.getMessage() for r in caplog.records if r.name == "src.main"]
+        assert f"[DRY RUN] 魚拓の取得をスキップ: {sample_outage.url}" in main_messages
+        assert "[DRY RUN] 魚拓の取得を 1 件スキップしました" in main_messages
         state = _read_state(state_file)
         stored = state["outages"][sample_outage.id]
         assert stored["archives"] == []
         assert stored["notified_statuses"] == [""]
         assert state["stats"]["total_notifications_this_month"] == 1
+
+    def test_state_is_saved_before_archiving(
+        self, mocker, state_file, fetch, allow_sending, archiver, sample_outage
+    ):
+        """魚拓を取る前に通知済みの状態を保存しておくこと
+
+        魚拓は 1 件あたり最大数分かかる。その間にランナーが落ちても、投稿済みの
+        マークとカウンタが保存されていれば次回二重投稿にならない。
+        """
+        fetch.return_value = [sample_outage]
+        mocker.patch("src.main.XNotifier._post_tweet", return_value=True)
+        seen: dict[str, dict] = {}
+
+        def _archive_and_peek(url: str) -> str:
+            seen["state"] = _read_state(state_file)
+            return _archived(url)
+
+        archiver.archive.side_effect = _archive_and_peek
+
+        assert main() == 0
+
+        stored_before = seen["state"]["outages"][sample_outage.id]
+        assert stored_before["notified_statuses"] == [""]
+        assert stored_before["archives"] == []
+        assert seen["state"]["stats"]["total_notifications_this_month"] == 1
+        stored_after = _read_state(state_file)["outages"][sample_outage.id]
+        assert stored_after["archives"][0]["url"] == _archived(sample_outage.url)
 
     def test_tweet_text_never_contains_archive_url(
         self, mocker, state_file, fetch, allow_sending, archiver, sample_outage

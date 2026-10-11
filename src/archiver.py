@@ -67,6 +67,28 @@ class WaybackArchiver:
         """認証情報が揃っているとき True"""
         return self._enabled
 
+    def _fetch_status(self, status_url: str, job_id: str) -> dict | None:
+        """ステータスを 1 回問い合わせる
+
+        通信エラー・5xx・非 JSON 応答は一時的な失敗として INFO に出し None を返す
+        （呼び出し側が上限時間まで再試行する。上限超過は呼び出し側が WARNING にする）。
+        """
+        try:
+            response = self.session.get(status_url, timeout=REQUEST_TIMEOUT)
+        except requests.RequestException as e:
+            logger.info(
+                f"魚拓の完了確認に失敗したため再試行します: job_id={job_id} - {e}"
+            )
+            return None
+        payload = _parse_json_object(response)
+        if not response.ok or payload is None:
+            logger.info(
+                f"魚拓の完了確認の応答が不正なため再試行します: job_id={job_id} - "
+                f"HTTP {response.status_code}"
+            )
+            return None
+        return payload
+
     def close(self) -> None:
         """HTTP セッションを閉じる"""
         self.session.close()
@@ -156,47 +178,37 @@ class WaybackArchiver:
     def _wait_for_capture(self, job_id: str) -> str | None:
         """status が success になるまで WAYBACK_POLL_INTERVAL 秒ごとに問い合わせ、timestamp を返す
 
-        error または WAYBACK_TIMEOUT 超過なら None。通信エラー・非 JSON 応答も
-        再問い合わせせずに None にする（魚拓はベストエフォートで、1 件の待ち時間を
-        REQUEST_TIMEOUT + WAYBACK_TIMEOUT + REQUEST_TIMEOUT 以内に収めるため）。
+        error 応答・想定外のステータス・WAYBACK_TIMEOUT 超過なら None。
+        問い合わせ自体の通信エラー・5xx・非 JSON 応答は一時的な要因とみなし、上限時間まで
+        問い合わせを続ける。SPN2 のステータス API は過負荷時に 502 や HTML を返すことが
+        あるが、ジョブ自体は動き続けて完了するので、1 回の失敗で諦めると実在する魚拓を
+        捨てることになる。待ち時間の上限は deadline で別に保証されているので延びない。
         """
         status_url = f"{WAYBACK_SAVE_URL}/status/{job_id}"
         deadline = time.monotonic() + WAYBACK_TIMEOUT
         while True:
-            try:
-                response = self.session.get(status_url, timeout=REQUEST_TIMEOUT)
-            except requests.RequestException as e:
-                logger.warning(f"魚拓の完了確認に失敗しました: job_id={job_id} - {e}")
-                return None
-
-            payload = _parse_json_object(response)
-            if not response.ok or payload is None:
-                logger.warning(
-                    f"魚拓の完了確認の応答が不正です: job_id={job_id} - "
-                    f"HTTP {response.status_code}"
-                )
-                return None
-
-            status = payload.get("status")
-            if status == "success":
-                timestamp = payload.get("timestamp")
-                if not timestamp:
+            payload = self._fetch_status(status_url, job_id)
+            if payload is not None:
+                status = payload.get("status")
+                if status == "success":
+                    timestamp = payload.get("timestamp")
+                    if not timestamp:
+                        logger.warning(
+                            f"魚拓の完了応答に timestamp がありません: job_id={job_id}"
+                        )
+                        return None
+                    return str(timestamp)
+                if status == "error":
                     logger.warning(
-                        f"魚拓の完了応答に timestamp がありません: job_id={job_id}"
+                        f"魚拓の取得がエラーになりました: job_id={job_id} - "
+                        f"{payload.get('status_ext', '')} {payload.get('message', '')}".rstrip()
                     )
                     return None
-                return str(timestamp)
-            if status == "error":
-                logger.warning(
-                    f"魚拓の取得がエラーになりました: job_id={job_id} - "
-                    f"{payload.get('status_ext', '')} {payload.get('message', '')}".rstrip()
-                )
-                return None
-            if status != "pending":
-                logger.warning(
-                    f"魚拓の完了確認が想定外のステータスです: job_id={job_id} - {status}"
-                )
-                return None
+                if status != "pending":
+                    logger.warning(
+                        f"魚拓の完了確認が想定外のステータスです: job_id={job_id} - {status}"
+                    )
+                    return None
 
             # 次の待機が終わる前に上限を超えるなら諦める（待ってから判定すると上限を
             # 待機間隔ぶん超過する）。Wayback 側で後から完了しても記録しない（再試行しない）

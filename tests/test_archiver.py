@@ -20,6 +20,7 @@ TARGET_URL = "https://www.toshima.co.jp/trouble/detail/121"
 JOB_ID = "spn2-job-abc"
 STATUS_URL = f"{WAYBACK_SAVE_URL}/status/{JOB_ID}"
 TIMESTAMP = "20261002051318"
+ARCHIVED_URL = f"https://web.archive.org/web/{TIMESTAMP}/{TARGET_URL}"
 
 
 # ポーリングの上限判定が壊れたときにテストがハングしないための待機回数の上限
@@ -301,37 +302,62 @@ class TestWaitForCaptureFailures:
         assert len(responses_lib.calls) == 3
 
     @responses_lib.activate
-    def test_status_http_error_returns_none(self, archiver, caplog):
-        """ステータス問い合わせが 5xx なら None を返し、再問い合わせしないこと"""
+    def test_status_http_error_is_retried_until_success(
+        self, archiver, no_sleep, caplog
+    ):
+        """ステータス問い合わせの 5xx は一時的な失敗として再問い合わせし、
+        その後 success になれば公開 URL を返すこと（警告は出さない）"""
         _add_submit({"url": TARGET_URL, "job_id": JOB_ID})
         _add_status({"message": "upstream error"}, status=502)
-        with caplog.at_level(logging.WARNING):
-            assert archiver.archive(TARGET_URL) is None
-        warnings = _warnings(caplog)
-        assert len(warnings) == 1
-        assert "502" in warnings[0].getMessage()
-        assert len(responses_lib.calls) == 2
+        _add_status({"status": "success", "timestamp": TIMESTAMP})
+        with caplog.at_level(logging.INFO):
+            assert archiver.archive(TARGET_URL) == ARCHIVED_URL
+        assert _warnings(caplog) == []
+        assert any("再試行" in r.getMessage() for r in caplog.records)
+        no_sleep.assert_called_once()
+        assert len(responses_lib.calls) == 3
 
     @responses_lib.activate
-    def test_status_connection_error_returns_none(self, archiver, caplog):
-        """ステータス問い合わせの接続エラーでは None を返し、例外を外に出さないこと"""
+    def test_status_connection_error_is_retried(self, archiver, caplog):
+        """ステータス問い合わせの接続エラーも再問い合わせし、例外を外に出さないこと"""
         _add_submit({"url": TARGET_URL, "job_id": JOB_ID})
         responses_lib.add(
             responses_lib.GET, STATUS_URL, body=requests.ConnectionError("reset")
         )
-        with caplog.at_level(logging.WARNING):
-            assert archiver.archive(TARGET_URL) is None
-        assert len(_warnings(caplog)) == 1
+        _add_status({"status": "success", "timestamp": TIMESTAMP})
+        with caplog.at_level(logging.INFO):
+            assert archiver.archive(TARGET_URL) == ARCHIVED_URL
+        assert _warnings(caplog) == []
         assert SECRET_KEY not in caplog.text
 
     @responses_lib.activate
-    def test_status_non_json_returns_none(self, archiver, caplog):
-        """ステータス応答が JSON でなければ None を返すこと"""
+    def test_status_non_json_is_retried(self, archiver, caplog):
+        """ステータス応答が JSON でなくても再問い合わせすること"""
         _add_submit({"url": TARGET_URL, "job_id": JOB_ID})
         _add_status("<html>busy</html>")
+        _add_status({"status": "success", "timestamp": TIMESTAMP})
+        with caplog.at_level(logging.INFO):
+            assert archiver.archive(TARGET_URL) == ARCHIVED_URL
+        assert _warnings(caplog) == []
+
+    @responses_lib.activate
+    def test_persistent_status_error_returns_none_at_deadline(
+        self, archiver, mocker, no_sleep, caplog
+    ):
+        """問い合わせの失敗が上限時間まで続けば None を返し、時間切れを警告すること"""
+        _add_submit({"url": TARGET_URL, "job_id": JOB_ID})
+        _add_status({"message": "upstream error"}, status=502)
+        mocker.patch(
+            "src.archiver.time.monotonic",
+            side_effect=[0.0, WAYBACK_TIMEOUT + 1.0],
+        )
         with caplog.at_level(logging.WARNING):
             assert archiver.archive(TARGET_URL) is None
-        assert len(_warnings(caplog)) == 1
+        warnings = _warnings(caplog)
+        assert len(warnings) == 1
+        assert "時間切れ" in warnings[0].getMessage()
+        no_sleep.assert_not_called()
+        assert len(responses_lib.calls) == 2
         assert len(responses_lib.calls) == 2
 
     @responses_lib.activate

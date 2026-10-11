@@ -87,6 +87,8 @@ class StateManager:
 
         旧形式（schema_version 1.0/1.1、障害エントリに archives が無い）も変換せずに
         そのまま読み、魚拓の記録なしとして扱う。schema_version の値では分岐しない。
+        読み込んだ schema_version はメモリ上で現行の値に置き換える（dirty にはしない。
+        変更のない実行で毎回コミットが発生しないよう、次に本当に保存するときだけ反映する）。
 
         Returns:
             状態辞書
@@ -116,6 +118,7 @@ class StateManager:
         logger.info(
             f"状態ファイルを読み込みました: {len(state['outages'])} 件の障害情報"
         )
+        state["schema_version"] = self.SCHEMA_VERSION
         return state
 
     def _create_initial_state(self) -> dict:

@@ -521,6 +521,9 @@ class TestRecordArchive:
 
         manager = StateManager(temp_state_file)
         assert "archives" not in manager.state["outages"]["100"]
+        # 版数はメモリ上で現行に置き換えるが、それだけでは保存対象にしない
+        assert manager.state["schema_version"] == "1.2"
+        assert not manager.is_dirty()
 
         # 旧形式のエントリにも追記できる（初回追記時に配列を作る）
         manager.record_archive("100", "復旧", self.ARCHIVE_URL)
