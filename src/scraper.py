@@ -330,15 +330,20 @@ class ToshimaScraper:
         Returns:
             (タイトル, 地域) のタプル
         """
-        # 日付とステータスを除去
+        # 先頭の日付とステータスを除去する。
+        # 日付は先頭の 1 回だけ消す。メンテナンス告知ではステータスが予定日
+        # （例「2026年3月12日」）になり、同じ日付や括弧がタイトル本文にも再登場
+        # しうるため、全置換するとタイトルが欠ける。
         clean_text = text
 
         if date:
-            clean_text = clean_text.replace(date, "")
+            clean_text = clean_text.replace(date, "", 1)
 
         if status:
             # ステータス部分（括弧込み）を除去
-            clean_text = re.sub(rf"[（(]{re.escape(status)}[）)]", "", clean_text)
+            clean_text = re.sub(
+                rf"[（(]{re.escape(status)}[）)]", "", clean_text, count=1
+            )
 
         clean_text = clean_text.strip()
 
@@ -349,7 +354,7 @@ class ToshimaScraper:
         # タイトルを抽出（地域情報を除去）
         title = clean_text
         if area:
-            title = re.sub(rf"[（(]{re.escape(area)}[）)]", "", title)
+            title = re.sub(rf"[（(]{re.escape(area)}[）)]", "", title, count=1)
 
         title = title.strip()
 

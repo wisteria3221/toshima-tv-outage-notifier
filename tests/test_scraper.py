@@ -226,6 +226,20 @@ class TestExtractTitleAndArea:
         assert title == "サービス停波（STB）について"
         assert area == ""
 
+    def test_repeated_date_and_status_in_title_are_kept(self, scraper):
+        """先頭の日付・ステータスと同じ文字列がタイトル本文に再登場しても消さないこと"""
+        # メンテナンス告知ではステータスが予定日になり、本文にも同じ日付が現れる
+        text = (
+            "2026.03.01（2026年3月12日）2026.03.01 実施分 "
+            "緊急メンテナンス（2026年3月12日）のお知らせ"
+        )
+        status = scraper._extract_status(text)
+        title, area = scraper._extract_title_and_area(text, "2026.03.01", status)
+
+        assert status == "2026年3月12日"
+        assert title == "2026.03.01 実施分 緊急メンテナンス（2026年3月12日）のお知らせ"
+        assert area == ""
+
 
 class TestFetchWithRetry:
     """_fetch_with_retry のテスト"""
