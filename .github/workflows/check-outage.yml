@@ -51,6 +51,9 @@ jobs:
           X_API_SECRET: ${{ secrets.X_API_SECRET }}
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          # Wayback Machine（魚拓）用。任意。未設定なら空文字が渡り、魚拓の取得だけスキップされる
+          WAYBACK_ACCESS_KEY: ${{ secrets.WAYBACK_ACCESS_KEY }}
+          WAYBACK_SECRET_KEY: ${{ secrets.WAYBACK_SECRET_KEY }}
           TZ: Asia/Tokyo
         # 終了コードの意味は src/main.py の EXIT_* 定数を参照
         #   0: 成功
