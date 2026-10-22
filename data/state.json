@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "outages": {
     "75": {
       "id": "75",
@@ -482,10 +482,30 @@
         "",
         "復旧"
       ]
+    },
+    "122": {
+      "id": "122",
+      "date": "2026.10.22",
+      "status": "",
+      "title": "「マイページ」緊急メンテナンスのお知らせ",
+      "area": "",
+      "url": "https://www.toshima.co.jp/trouble/detail/122",
+      "first_seen": "2026-10-22T00:47:20.328430+00:00",
+      "last_updated": "2026-10-22T00:47:20.328430+00:00",
+      "notified_statuses": [
+        ""
+      ],
+      "archives": [
+        {
+          "status": "",
+          "archived_at": "2026-10-22T00:48:07.436839+00:00",
+          "url": "https://web.archive.org/web/20261022004756/https://www.toshima.co.jp/trouble/detail/122"
+        }
+      ]
     }
   },
   "stats": {
-    "total_notifications_this_month": 4,
+    "total_notifications_this_month": 5,
     "month": "2026-10"
   }
 }
