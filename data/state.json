@@ -486,26 +486,32 @@
     "122": {
       "id": "122",
       "date": "2026.10.22",
-      "status": "",
+      "status": "復旧",
       "title": "「マイページ」緊急メンテナンスのお知らせ",
       "area": "",
       "url": "https://www.toshima.co.jp/trouble/detail/122",
       "first_seen": "2026-10-22T00:47:20.328430+00:00",
-      "last_updated": "2026-10-22T00:47:20.328430+00:00",
+      "last_updated": "2026-11-12T05:07:19.748195+00:00",
       "notified_statuses": [
-        ""
+        "",
+        "復旧"
       ],
       "archives": [
         {
           "status": "",
           "archived_at": "2026-10-22T00:48:07.436839+00:00",
           "url": "https://web.archive.org/web/20261022004756/https://www.toshima.co.jp/trouble/detail/122"
+        },
+        {
+          "status": "復旧",
+          "archived_at": "2026-11-12T05:07:37.882513+00:00",
+          "url": "https://web.archive.org/web/20261112050726/https://www.toshima.co.jp/trouble/detail/122"
         }
       ]
     }
   },
   "stats": {
-    "total_notifications_this_month": 5,
-    "month": "2026-10"
+    "total_notifications_this_month": 1,
+    "month": "2026-11"
   }
 }
