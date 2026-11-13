@@ -159,7 +159,7 @@ GitHub Actions のみ（シークレット）:
 - Healthchecks への報告はコミットステップの `outcome` も見る。push に失敗したら checker が 0 でも `/fail` を送る（投稿済みの状態が保存されず次回二重投稿の恐れがあるため）
 - `data/state.json` を手で直すときは、cron-job.org のジョブを一時停止し実行中のランが無いのを確認してから push する（ランと同じ箇所を直すと上記の `-X theirs` でランの内容が勝ち、人の修正が黙って消える）
 - cron-job.org のジョブ操作（一時停止・再開・PAT 差し替え）は `cron-job-org-api` スキル、Healthchecks の操作は `healthchecks-api` スキルを使う。ジョブ結果ごとの対応表とシークレットの期限管理は [.kiro/steering/operations.md](.kiro/steering/operations.md) を参照
-- Lint とテストは実行しない（10 分ごとに重複させないため、[lint.yml](.github/workflows/lint.yml) に移した）。依存も本体分のみ（`uv sync --frozen`、dev extras なし）。テストが壊れたコードでも main に入れば障害チェックはそのまま走るので、push 後は lint.yml の結果を確認すること
+- Lint とテストは実行しない（10 分ごとに重複させないため、[lint.yml](.github/workflows/lint.yml) に移した）。依存も本体分のみ（`uv sync --frozen`、dev extras なし）。テストが壊れたコードでも main に入れば障害チェックはそのまま走るので、push 後は lint.yml の結果を確認すること（push 後初回の障害チェックまで含めて `verify-push` スキルで確認できる）
 - リポジトリ設定でシークレットの設定が必要（X API の 4 つは必須。`WAYBACK_ACCESS_KEY` / `WAYBACK_SECRET_KEY` は任意で、Run outage checker ステップの `env` 経由で渡す。未設定でもジョブは動き魚拓だけスキップされる）
 
 **Lint・テストワークフロー**: [.github/workflows/lint.yml](.github/workflows/lint.yml)
