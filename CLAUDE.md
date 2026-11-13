@@ -33,14 +33,8 @@ DRY_RUN=true uv run python -m src.main
 
 ### テスト
 ```bash
-# セットアップ（初回のみ）
-uv sync --all-extras
-
 # 全テスト実行
 uv run pytest
-
-# または、仮想環境を有効化してから実行
-pytest
 
 # 特定のテストファイルを実行
 uv run pytest tests/test_scraper.py
@@ -164,6 +158,7 @@ GitHub Actions のみ（シークレット）:
 - push が拒否された場合（人が main に push した直後など。`concurrency` は Actions 同士しか直列化しない）は `git pull --rebase -X theirs` して 1 回だけ再試行する。投稿済みの状態をコミットできないと次回二重投稿になるため。`state.json` が衝突したらランの内容を優先する（投稿済みツイートを反映しているのはラン側。人の編集はやり直せる）。行単位のマージは JSON の構文を保証しないので push 前に `python3 -m json.tool` で検証し、壊れていればジョブを失敗させる。rebase 先は `GITHUB_REF_NAME`（`main` 固定ではない）
 - Healthchecks への報告はコミットステップの `outcome` も見る。push に失敗したら checker が 0 でも `/fail` を送る（投稿済みの状態が保存されず次回二重投稿の恐れがあるため）
 - `data/state.json` を手で直すときは、cron-job.org のジョブを一時停止し実行中のランが無いのを確認してから push する（ランと同じ箇所を直すと上記の `-X theirs` でランの内容が勝ち、人の修正が黙って消える）
+- cron-job.org のジョブ操作（一時停止・再開・PAT 差し替え）は `cron-job-org-api` スキル、Healthchecks の操作は `healthchecks-api` スキルを使う。ジョブ結果ごとの対応表とシークレットの期限管理は [.kiro/steering/operations.md](.kiro/steering/operations.md) を参照
 - Lint とテストは実行しない（10 分ごとに重複させないため、[lint.yml](.github/workflows/lint.yml) に移した）。依存も本体分のみ（`uv sync --frozen`、dev extras なし）。テストが壊れたコードでも main に入れば障害チェックはそのまま走るので、push 後は lint.yml の結果を確認すること
 - リポジトリ設定でシークレットの設定が必要（X API の 4 つは必須。`WAYBACK_ACCESS_KEY` / `WAYBACK_SECRET_KEY` は任意で、Run outage checker ステップの `env` 経由で渡す。未設定でもジョブは動き魚拓だけスキップされる）
 
@@ -222,6 +217,7 @@ GitHub Actions のみ（シークレット）:
 - `2` は [src/scraper.py](src/scraper.py) の `UpstreamUnavailableError`（1ページ目をリトライ後も取得できない）に対応。としまテレビ側の接続タイムアウトやランナー側の DNS 失敗が原因で、プログラムの不具合ではないためワークフローでは警告のみでジョブは成功扱いにする
 - 「ページは取れたが 0 件」は構造変更の疑いがあるので `1`（失敗）のまま。4xx 応答（`UpstreamRejectedError`）も同じ理由で `1`
 - 過去 2 ヶ月の Actions 失敗 31 件のうち 30 件がこの上流要因だった（2026-10 調査）
+- 終了コードの意味や Healthchecks への送り分けを変えるときは `src/main.py`・`check-outage.yml`・README の 3 箇所を同時に更新する
 
 **未起動検知（dead-man's switch）**
 - GitHub の `schedule` はベストエフォートで、実績では 1 日 48 回想定に対し 4〜7 回しか起動しない期間があった。起動しなかった実行は履歴に残らず気づけない
