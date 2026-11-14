@@ -82,7 +82,19 @@ npx cc-sdd@latest --claude-skills --lang ja --dry-run
 # 問題なければ実行
 npx cc-sdd@latest --claude-skills --lang ja
 ```
-注意: 実行すると `CLAUDE.md` や `.kiro/steering` も更新されうる。`git diff` でレビューしてからコミットすること。
+注意: 実行すると `CLAUDE.md` や `.kiro/steering` も更新されうる。`git diff` でレビューしてからコミットすること。下記のプロジェクトスキルも `.claude/skills/` にあるので、`--dry-run` の差分でこれらを消したり上書きしたりしないか確かめる。
+
+## プロジェクトスキル
+
+運用作業は `.claude/skills/` のスキルを使う（cc-sdd の `kiro-*` は末尾の SDD 節を参照）。同梱のスクリプトは標準ライブラリだけで動く。GitHub は `gh` のログインを使い、cron-job.org と Healthchecks の API キーは `.env`（`CRONJOB_API_KEY` / `HEALTHCHECKS_API_KEY`）から読む。
+
+| スキル | 使う場面 |
+|---|---|
+| `verify-push` | push・PR のマージの後に、Lint and Test と push 後初回の障害チェック（終了コード・state のコミット・Healthchecks への ping）を確認する。スクリプトはバックグラウンドで実行する（最大 25 分ほど待つ） |
+| `update-dependencies` | Dependabot の PR の処理と依存の一括更新。uv の PR が複数あると `uv.lock` が衝突するので 1 本にまとめる |
+| `investigate-alert` | Healthchecks のアラート・Actions の失敗・`startup_failure` の原因を、Actions・Healthchecks・cron-job.org の 3 か所から切り分ける。過去のアラートは `--from` / `--to` で期間を指定する |
+| `cron-job-org-api` | cron-job.org のジョブの確認・一時停止・再開・PAT の差し替え（API は 1 日 100 リクエストまで） |
+| `healthchecks-api` | Healthchecks のチェックの確認・Period と Grace の変更・一時停止・ping 履歴 |
 
 ## アーキテクチャ
 
