@@ -181,7 +181,7 @@ GitHub Actions のみ（シークレット）:
 **Dependabot**: [.github/dependabot.yml](.github/dependabot.yml)
 - `devcontainers`（Feature のロック）、`github-actions`（`actions/checkout` 等）、`uv`（`uv.lock`）を週次で更新する。`uv` の PR はロックファイルも更新されるので、CI の `uv sync --frozen` と整合する
 - ワークフローのアクションはコミット SHA + 版のコメント（`@<sha> # v10.3.3`）で固定している（シークレットと `contents: write` を扱うため、タグの書き換えによるサプライチェーン攻撃に備える）。Dependabot は SHA とコメントを一緒に更新する。手で追加・更新するときもタグではなく SHA で書く
-- setup-uv は `cache-python: true` / `prune-cache: false` で CPython と依存の wheel をキャッシュする（10 分ごとの実行で毎回ダウンロードしないため）。uv 本体のバージョンは固定していない（毎回最新。固定すると手動更新が必要になり、壊れた実績も無いため見送った）
+- setup-uv は `cache-python: true` / `prune-cache: false` で CPython と依存の wheel をキャッシュする（10 分ごとの実行で毎回ダウンロードしないため）。uv 本体のバージョンは固定していない（毎回最新。固定すると手動更新が必要になり、壊れた実績も無いため見送った）。ジョブの `env` で `UV_PYTHON_PREFERENCE: only-managed` を指定し、uv 管理の Python だけを使う（ubuntu-26.04 のランナーにはシステムの Python 3.14 があり、指定しないとそちらの古いパッチ版で動き、`cache-python` が保存対象を見つけられず毎回 warning になる）
 
 ## 実装上の重要なポイント
 
