@@ -28,6 +28,10 @@ jobs:
       # GitHub 側の schedule 間引きやランナー障害で「そもそも起動していない」状態を検知するため、
       # 成功時のみ通常 ping を送り、一定時間 ping が途絶えたら Healthchecks 側がアラートする。
       HEALTHCHECKS_URL: ${{ secrets.HEALTHCHECKS_URL }}
+      # Python は uv が管理するもの（.python-version の 3.14 系の最新）だけを使う。
+      # ubuntu-26.04 のランナーには /usr/bin/python3.14 があり、既定ではそちらが優先されて
+      # 古いパッチ版で動くうえ、cache-python が保存対象を見つけられず毎回 warning になる。
+      UV_PYTHON_PREFERENCE: only-managed
 
     steps:
       - name: Checkout repository

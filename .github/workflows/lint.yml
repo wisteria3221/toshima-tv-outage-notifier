@@ -13,6 +13,9 @@ on:
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
+    env:
+      # システムの Python ではなく uv 管理の Python を使う（理由は check-outage.yml と同じ）
+      UV_PYTHON_PREFERENCE: only-managed
 
     steps:
       - name: Checkout repository
