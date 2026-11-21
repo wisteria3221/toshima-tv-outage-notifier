@@ -19,7 +19,11 @@ allowed-tools: Bash, Read
 ```bash
 python3 .claude/skills/investigate-alert/scripts/snapshot.py [--hours 6]
 python3 .claude/skills/investigate-alert/scripts/snapshot.py --from 2026-11-12T04:30 --to 2026-11-12T07:00   # 過去のアラート
+python3 .claude/skills/investigate-alert/scripts/snapshot.py --from 2026-11-20T00:00 --to 2026-11-21T00:00 --scan-logs   # 1 日分を全ランのログまで見る
 ```
+
+- `--scan-logs` は全ランのログを読み、終了コードと state のコミット結果の内訳、WARNING/ERROR を種類ごとに数えた件数、X への通知、魚拓の結果を出す。conclusion が success でも、終了コード 2（上流不通）・魚拓の失敗・レート制限によるスキップは WARNING としてログにしか出ないので、日次の確認ではこれを付ける（1 日分で 30 秒ほど）
+- Actions の履歴は `gh api` でページ番号を指定して取る。`gh run list` や `gh api --paginate` は、2 ページ目以降を数値 ID 形式の URL（`repositories/<id>/...`）で取りに行き、クラウドのセッションのプロキシに拒否されるため
 
 - 直近の状況は `--hours`、過去のアラートは `--from` / `--to` で、アラートの時刻を前後 1 時間ほど含む期間を指定する。時差を書かない時刻は JST とみなされる
 - Actions と Healthchecks の flips（up と down の切り替わり）は、期間を指定すればさかのぼって取れる。Healthchecks の ping（直近 100 件、約 17 時間分）と cron-job.org の履歴（直近 50 件、約 8 時間分）はそれより前を取れない。「注意: 取得件数の上限のため…」と出たら、その時刻より前は見えていない。その場合は Actions と flips から判断する
