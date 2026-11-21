@@ -73,6 +73,56 @@ def run_json(cmd: list[str]):
     return json.loads(run(cmd))
 
 
+# GitHub の API はページ送りの Link ヘッダーに数値 ID 形式の URL（repositories/<id>/...）を返す。
+# `gh run list` や `gh api --paginate` はそれをたどるため、owner/repo 形式しか通さない
+# プロキシ（クラウドのセッションなど）では 2 ページ目以降で 403 になる。
+# そこでページ番号を自分で付けて、常に repos/{owner}/{repo}/... の形で要求する。
+MAX_RUNS = 1000
+_PER_PAGE = 100
+
+
+def gh_api(path: str):
+    return run_json(["gh", "api", path])
+
+
+def to_run(r: dict) -> dict:
+    """REST のラン表現を、このスクリプトで使う形（gh run list --json と同じ名前）に揃える。"""
+    return {
+        "databaseId": r["id"],
+        "event": r["event"],
+        "status": r["status"],
+        "conclusion": r["conclusion"],
+        "createdAt": r["created_at"],
+        "headSha": r["head_sha"],
+    }
+
+
+def list_runs(workflow: str, since: datetime, until: datetime) -> list[dict]:
+    created = (
+        f"{since.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}"
+        f"..{until.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}"
+    )
+    runs: list[dict] = []
+    for page in range(1, MAX_RUNS // _PER_PAGE + 1):
+        batch = gh_api(
+            f"repos/{{owner}}/{{repo}}/actions/workflows/{workflow}/runs"
+            f"?per_page={_PER_PAGE}&page={page}&created={created}"
+            "&exclude_pull_requests=true"
+        )["workflow_runs"]
+        runs += [to_run(r) for r in batch]
+        if len(batch) < _PER_PAGE:
+            break
+    return runs
+
+
+def run_jobs(run_id: int) -> list[dict]:
+    return gh_api(f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/jobs")["jobs"]
+
+
+def job_log(job_id: int) -> str:
+    return run(["gh", "api", f"repos/{{owner}}/{{repo}}/actions/jobs/{job_id}/logs"])
+
+
 def truncation_note(times: list[datetime], since: datetime, source: str) -> None:
     """取得件数の上限で期間の始めまで届いていないとき、その旨を出す（黙って短い期間を見せない）。"""
     if times and min(times) > since + timedelta(minutes=15):
@@ -85,23 +135,7 @@ def truncation_note(times: list[datetime], since: datetime, source: str) -> None
 
 
 def actions_section(since: datetime, until: datetime) -> dict:
-    fields = "databaseId,event,status,conclusion,createdAt,headSha"
-    created = f"{since.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}..{until.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}"
-    all_runs = run_json(
-        [
-            "gh",
-            "run",
-            "list",
-            "-w",
-            OUTAGE_WORKFLOW,
-            "--created",
-            created,
-            "-L",
-            "1000",
-            "--json",
-            fields,
-        ]
-    )
+    all_runs = list_runs(OUTAGE_WORKFLOW, since, until)
     runs = [r for r in all_runs if since <= parse_time(r["createdAt"]) <= until]
     runs.sort(key=lambda r: r["createdAt"])
 
@@ -118,7 +152,7 @@ def actions_section(since: datetime, until: datetime) -> dict:
         print(
             f"- 最初: {fmt(parse_time(runs[0]['createdAt']))} / 最後: {fmt(parse_time(runs[-1]['createdAt']))}"
         )
-        if len(all_runs) >= 1000:
+        if len(all_runs) >= MAX_RUNS:
             truncation_note(
                 [parse_time(r["createdAt"]) for r in runs], since, "Actions "
             )
@@ -141,9 +175,7 @@ def actions_section(since: datetime, until: datetime) -> dict:
                 f"- ラン {r['databaseId']}（{fmt(parse_time(r['createdAt']))}、{r['conclusion']}、"
                 f"headSha `{r['headSha'][:7]}`）"
             )
-            jobs = run_json(
-                ["gh", "run", "view", str(r["databaseId"]), "--json", "jobs"]
-            )["jobs"]
+            jobs = run_jobs(r["databaseId"])
             if not jobs:
                 # ジョブが 1 つも起動していない。checker も Healthchecks への報告も動いていないので
                 # ping が途絶え、続けば Healthchecks が down になる
@@ -159,7 +191,9 @@ def actions_section(since: datetime, until: datetime) -> dict:
                 print(f"    - ジョブが起動していない（ログ無し）。{cause}")
                 continue
             try:
-                log = run(["gh", "run", "view", str(r["databaseId"]), "--log-failed"])
+                log = "\n".join(
+                    job_log(j["id"]) for j in jobs if j["conclusion"] == "failure"
+                )
                 lines = []
                 for raw in log.splitlines():
                     if "[36;1m" in raw:  # スクリプト本文のエコーは除く
@@ -176,21 +210,11 @@ def actions_section(since: datetime, until: datetime) -> dict:
                 print(f"    - ログを取得できず: {e}")
         print()
 
-    lint = run_json(
-        [
-            "gh",
-            "run",
-            "list",
-            "-w",
-            LINT_WORKFLOW,
-            "-b",
-            "main",
-            "-L",
-            "1",
-            "--json",
-            "conclusion,createdAt,headSha",
-        ]
-    )
+    lint = gh_api(
+        f"repos/{{owner}}/{{repo}}/actions/workflows/{LINT_WORKFLOW}/runs"
+        "?branch=main&per_page=1"
+    )["workflow_runs"]
+    lint = [to_run(r) for r in lint]
     if lint:
         result = lint[0]["conclusion"] or "実行中"
         mark = (
@@ -202,6 +226,123 @@ def actions_section(since: datetime, until: datetime) -> dict:
             f"Lint and Test（main の最新）: {result}（`{lint[0]['headSha'][:7]}`、{fmt(parse_time(lint[0]['createdAt']))}）{mark}\n"
         )
     return {"runs": runs}
+
+
+# ------------------------------------------------------------- ログの走査
+
+# checker のログ行: "<ランナー時刻> <JST 時刻>,<ms> - <logger> - <LEVEL> - <本文>"
+_LOG_LINE = re.compile(r" - (?:[\w.]+) - (WARNING|ERROR|CRITICAL) - (.*)$")
+_ANNOTATION = re.compile(r"##\[(warning|error)\](.*)$")
+_ENV_LINE = re.compile(r"^\S+\s+(EXIT_CODE|COMMIT_OUTCOME): ?(.*)$")
+_NOTIFIED = re.compile(r" - INFO - (.+を通知しました: .*)$")
+_ARCHIVE_SUMMARY = re.compile(
+    r" - (?:INFO|WARNING) - (魚拓を \d+ 件取得、\d+ 件失敗.*)$"
+)
+_SCAN_WORKERS = 8
+
+
+def _normalize(message: str) -> str:
+    """件数や時刻だけが違う同種のメッセージを 1 つにまとめるため、数字を N に置き換える。"""
+    return re.sub(r"\d+", "N", message.strip())[:160]
+
+
+def _scan_one(r: dict) -> dict:
+    out = {
+        "run": r,
+        "exit": None,
+        "commit": None,
+        "lines": [],
+        "notified": [],
+        "archive": [],
+        "error": None,
+    }
+    try:
+        jobs = run_jobs(r["databaseId"])
+        if not jobs:
+            out["exit"] = out["commit"] = "ジョブが起動していない"
+        for job in jobs:
+            for raw in job_log(job["id"]).splitlines():
+                if "[36;1m" in raw:  # スクリプト本文のエコーは除く
+                    continue
+                if m := _ENV_LINE.search(raw):
+                    key = "exit" if m[1] == "EXIT_CODE" else "commit"
+                    out[key] = m[2].strip() or "（空）"
+                elif m := _LOG_LINE.search(raw):
+                    out["lines"].append((m[1], m[2]))
+                elif m := _ANNOTATION.search(raw):
+                    out["lines"].append((m[1].upper(), m[2]))
+                if m := _NOTIFIED.search(raw):
+                    out["notified"].append(m[1].strip())
+                if m := _ARCHIVE_SUMMARY.search(raw):
+                    out["archive"].append(m[1].strip())
+    except RuntimeError as e:
+        out["error"] = str(e)
+    return out
+
+
+def scan_logs_section(runs: list[dict]) -> None:
+    """全ランのログを読み、終了コード・commit の結果・WARNING/ERROR・通知・魚拓を集計する。
+
+    conclusion が success でも、終了コード 2（上流不通）や魚拓の失敗、レート制限による
+    スキップは WARNING としてログにしか出ないため、それらを拾う。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    print("## ログの走査（全ラン）\n")
+    if not runs:
+        print("- 対象のランが無い\n")
+        return
+    with ThreadPoolExecutor(_SCAN_WORKERS) as pool:
+        results = list(pool.map(_scan_one, runs))
+
+    unread = [x for x in results if x["error"]]
+    print(f"- 読んだラン: {len(results) - len(unread)} / {len(results)} 件")
+    for x in unread[:5]:
+        print(f"    - ラン {x['run']['databaseId']} のログを取得できず: {x['error']}")
+
+    exits = Counter(
+        x["exit"] or "不明（Healthchecks への報告ステップが動いていない）"
+        for x in results
+        if not x["error"]
+    )
+    print(
+        f"- 終了コード: {', '.join(f'{k}: {v} 件' for k, v in sorted(exits.items()))}"
+    )
+    commits = Counter(x["commit"] or "不明" for x in results if not x["error"])
+    print(
+        f"- state のコミット: {', '.join(f'{k}: {v} 件' for k, v in sorted(commits.items()))}"
+    )
+    if commits.get("failure"):
+        print(
+            "    - **commit=failure がある。state.json を push できておらず二重投稿の恐れ**"
+        )
+
+    groups: dict[tuple[str, str], list] = {}
+    for x in results:
+        for level, message in x["lines"]:
+            groups.setdefault((level, _normalize(message)), []).append(
+                (x["run"], message)
+            )
+    if not groups:
+        print("- WARNING / ERROR: なし")
+    else:
+        print(f"- WARNING / ERROR: {len(groups)} 種類")
+        for (level, _), hits in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+            first = parse_time(hits[0][0]["createdAt"])
+            last = parse_time(hits[-1][0]["createdAt"])
+            span = fmt(first) if first == last else f"{fmt(first)} 〜 {fmt(last)}"
+            print(f"    - {level} ×{len(hits)}（{span}）: {hits[-1][1].strip()[:200]}")
+
+    notified = [(x["run"], n) for x in results for n in x["notified"]]
+    print(f"- 通知（X への投稿）: {len(notified)} 件")
+    for r, n in notified[:20]:
+        print(f"    - {fmt(parse_time(r['createdAt']))}: {n[:150]}")
+    archive = [(x["run"], a) for x in results for a in x["archive"]]
+    if archive:
+        print(f"- 魚拓: {len(archive)} 回")
+        for r, a in archive[:10]:
+            print(f"    - {fmt(parse_time(r['createdAt']))}: {a[:150]}")
+    print()
 
 
 # -------------------------------------------------------------- Healthchecks
@@ -342,6 +483,11 @@ def main() -> int:
         help="Healthchecks のチェック（uuid か名前。既定: 名前に toshima を含むもの）",
     )
     p.add_argument(
+        "--scan-logs",
+        action="store_true",
+        help="全ランのログを読み、終了コード・WARNING/ERROR・通知・魚拓を集計する（1 日分で 1 分ほど）",
+    )
+    p.add_argument(
         "--skip-cronjob",
         action="store_true",
         help="cron-job.org を見ない（1 日 100 リクエストの制限を節約）",
@@ -356,10 +502,13 @@ def main() -> int:
         else until - timedelta(hours=args.hours)
     )
     print(f"# 稼働状況（{fmt(since)} 〜 {fmt(until)}）\n")
+    runs: list[dict] = []
     try:
-        actions_section(since, until)
+        runs = actions_section(since, until)["runs"]
     except RuntimeError as e:
         print(f"## Actions\n\n- 取得できず: {e}\n")
+    if args.scan_logs:
+        scan_logs_section(runs)
     healthchecks_section(since, until, args.hc_check)
     if not args.skip_cronjob:
         cronjob_section(since, until)
